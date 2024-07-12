@@ -77,12 +77,13 @@ func TestConnect(t *testing.T) {
 
 	startTime := time.Now()
 	leader := 0
-	for i := 0; i < 1000; i++ {
+	for i := 0; i < 1000; {
 		for ; leader < len(servers); leader++ {
 			if _, is := servers[leader].GetState(); is {
 				fmt.Printf("t:%v try Start\n", leader)
 				_, _, isLeader := servers[leader].Start(&Op{Key: strconv.Itoa(i), Value: strconv.Itoa(i + 10000)})
 				if isLeader {
+					i++
 					break
 				} else {
 					leader = 0
