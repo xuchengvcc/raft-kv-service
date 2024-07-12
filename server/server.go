@@ -7,9 +7,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"raft-kv-service/raft"
+
 	"6.5840/labgob"
 	"6.5840/labrpc"
-	"6.5840/raft"
 )
 
 const RaftStateNumThreshold = 90
