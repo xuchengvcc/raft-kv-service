@@ -19,12 +19,12 @@ const HandleTimeout = time.Duration(1000) * time.Millisecond
 const MaxMapLen = 10000
 
 const (
-	GET int = iota
+	GET int32 = iota
 	PUT
 	APPEND
 )
 
-func optype(op int) string {
+func optype(op int32) string {
 	switch op {
 	case GET:
 		return "GET"
@@ -47,34 +47,23 @@ type result struct {
 	LastId  uint64
 	Err     Err
 	Value   string
-	ResTerm int // commit时的Term
-}
-
-type Op struct {
-	// Your definitions here.
-	// Field names must start with capital letters,
-	// otherwise RPC will break.
-	Optype  int
-	IncrId  uint64 // 全局递增的Id，用于区分请求的新旧
-	ClerkId int    // 客户端 Id，与全局递增 Id 拼接以标识唯一消息
-	Key     string
-	Value   string
+	ResTerm int64 // commit时的Term
 }
 
 type KVServer struct {
 	mu      sync.Mutex
-	me      int
+	me      int32
 	rf      *raft.Raft
 	applyCh chan raft.ApplyMsg
 	dead    int32 // set by Kill()
 
-	waitCh  map[int]*chan result // 接收Raft提交条目的通道
-	history map[int]result       // 存储此前的历史结果
+	waitCh  map[int64]*chan result // 接收Raft提交条目的通道
+	history map[int32]result       // 存储此前的历史结果
 
 	maxraftstate int // snapshot if log grows this big
 	maxMapLen    int
 	db           map[string]string
-	lastApplied  int // apply的最后一个下标
+	lastApplied  int64 // apply的最后一个下标
 	persister    *raft.Persister
 	// Your definitions here.
 }
@@ -86,7 +75,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		reply.Err = ErrWrongLeader
 		return
 	}
-	opArgs := &Op{
+	opArgs := &raft.Op{
 		Optype:  GET,
 		IncrId:  args.IncrId,
 		ClerkId: args.ClerkId,
@@ -105,7 +94,7 @@ func (kv *KVServer) Put(args *PutAppendArgs, reply *PutAppendReply) {
 		reply.Err = ErrWrongLeader
 		return
 	}
-	opArgs := &Op{
+	opArgs := &raft.Op{
 		Optype:  PUT,
 		IncrId:  args.IncrId,
 		ClerkId: args.ClerkId,
@@ -124,7 +113,7 @@ func (kv *KVServer) Append(args *PutAppendArgs, reply *PutAppendReply) {
 		reply.Err = ErrWrongLeader
 		return
 	}
-	opArgs := &Op{
+	opArgs := &raft.Op{
 		Optype:  APPEND,
 		IncrId:  args.IncrId,
 		ClerkId: args.ClerkId,
@@ -136,14 +125,14 @@ func (kv *KVServer) Append(args *PutAppendArgs, reply *PutAppendReply) {
 	reply.Err = res.Err
 }
 
-func (kv *KVServer) HandleOp(opArgs *Op) result {
+func (kv *KVServer) HandleOp(opArgs *raft.Op) result {
 	kv.mu.Lock()
 	if history, exist := kv.history[opArgs.ClerkId]; exist && history.LastId == opArgs.IncrId {
 		kv.mu.Unlock()
 		return history
 	}
 	kv.mu.Unlock()
-	sIdx, sTerm, isLeader := kv.rf.Start(*opArgs)
+	sIdx, sTerm, isLeader := kv.rf.Start(opArgs)
 	if !isLeader {
 		return result{Err: ErrWrongLeader, Value: ""}
 	}
@@ -187,10 +176,11 @@ func (kv *KVServer) ApplyHandler() {
 		// 循环将从节点提交的条目应用到状态机
 		_log := <-kv.applyCh
 		if _log.CommandValid {
-			op, ok := _log.Command.(Op)
-			if !ok {
-				DPrintf("L %v: Raft Log Convert Failed, Type Incompact", kv.me)
-			}
+			// op, ok := _log.Command.(raft.Op)
+			// if !ok {
+			// 	DPrintf("L %v: Raft Log Convert Failed, Type Incompact", kv.me)
+			// }
+			op := _log.Command
 			// else {
 			// 	DPrintf("L %v: Get the Command Successful", kv.me)
 			// }
@@ -216,7 +206,7 @@ func (kv *KVServer) ApplyHandler() {
 			// _, isLeader := kv.rf.GetState()
 			if need {
 				// DPrintf("%v DBExecute, IsLeader: %v", kv.me, isLeader)
-				res = kv.DBExecute(&op)
+				res = kv.DBExecute(op)
 				res.ResTerm = _log.SnapshotTerm
 				kv.history[op.ClerkId] = res // 更新历史
 			}
@@ -281,7 +271,7 @@ func (kv *KVServer) LoadSnapshot(snapshot []byte) {
 	decoder := labgob.NewDecoder(buffer)
 
 	db := make(map[string]string)
-	historyDb := make(map[int]result)
+	historyDb := make(map[int32]result)
 	if decoder.Decode(&db) != nil || decoder.Decode(&historyDb) != nil {
 		// DPrintf("%v Decode Snapshot Failed", kv.me)
 	} else {
@@ -291,7 +281,7 @@ func (kv *KVServer) LoadSnapshot(snapshot []byte) {
 	}
 }
 
-func (kv *KVServer) DBExecute(op *Op) (res result) {
+func (kv *KVServer) DBExecute(op *raft.Op) (res result) {
 	// 需在加锁状态下调用
 	DPrintf("%v Execute DBExecute, IncrId: %v, %v(%v: %v)", kv.me, op.IncrId, optype(op.Optype), op.Key, op.Value)
 	res.LastId = op.IncrId
@@ -358,10 +348,10 @@ func (kv *KVServer) killed() bool {
 // you don't need to snapshot.
 // StartKVServer() must return quickly, so it should start goroutines
 // for any long-running work.
-func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister, maxraftstate int) *KVServer {
+func StartKVServer(servers []*labrpc.ClientEnd, me int32, persister *raft.Persister, maxraftstate int) *KVServer {
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
-	labgob.Register(Op{})
+	labgob.Register(raft.Op{})
 
 	kv := new(KVServer)
 	kv.me = me
@@ -376,8 +366,8 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 	// You may need initialization code here.
 	kv.dead = 0
-	kv.history = make(map[int]result)
-	kv.waitCh = map[int]*chan result{}
+	kv.history = make(map[int32]result)
+	kv.waitCh = map[int64]*chan result{}
 	kv.maxMapLen = MaxMapLen
 	kv.db = map[string]string{}
 	kv.mu.Lock()

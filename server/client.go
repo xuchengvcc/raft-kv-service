@@ -9,7 +9,7 @@ import (
 	"6.5840/labrpc"
 )
 
-var id = 100
+var id int32 = 100
 var mu sync.Mutex
 
 const RPCRetryTime = time.Millisecond * 5
@@ -19,7 +19,7 @@ type Clerk struct {
 	// You will have to modify this struct.
 	leader  int
 	incrId  uint64
-	clerkId int
+	clerkId int32
 }
 
 func (c *Clerk) getUid() uint64 {
@@ -29,7 +29,7 @@ func (c *Clerk) getUid() uint64 {
 	return timestamp
 }
 
-func (c *Clerk) getClerkId() int {
+func (c *Clerk) getClerkId() int32 {
 	mu.Lock()
 	defer mu.Unlock()
 	id++
