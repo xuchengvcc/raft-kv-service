@@ -1,0 +1,34 @@
+syntax = "proto3";
+
+option go_package = "./server;server";
+
+
+service Service {
+  // Sends a AppendRPC
+  rpc Get (GetArgs) returns (GetReply) {}
+  rpc Put (PutAppendArgs) returns (PutAppendReply) {}
+  rpc Append (PutAppendArgs) returns (PutAppendReply) {}
+}
+
+message GetArgs {
+    uint64 incrId = 1;
+    int32 clerkId = 2;
+    string key = 3;
+}
+
+message GetReply {
+    string value = 1;
+    string err = 2;
+}
+
+message PutAppendArgs {
+    uint64 incrId = 1;
+    int32 clerkId = 2;
+    string key = 3;
+    string value = 4;
+}
+
+message PutAppendReply {
+    string err = 1;
+}
+

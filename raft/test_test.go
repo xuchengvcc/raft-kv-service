@@ -31,19 +31,6 @@ func setupTestCase(t *testing.T) ([]*Raftserver, []chan ApplyMsg) {
 		servers = append(servers, server)
 	}
 
-	for i := 0; i < len(nodeAddrs); i++ {
-		ok := servers[i].connectToPeers()
-		if !ok {
-			fmt.Printf("t: %v fail to connect to other\n", i)
-		}
-	}
-
-	time.Sleep(2 * time.Second)
-
-	for i := 0; i < len(nodeAddrs); i++ {
-		servers[i].startWork()
-	}
-
 	return servers, channels
 
 }
@@ -53,7 +40,7 @@ func TestConnect(t *testing.T) {
 	// 如果 TestMain 使用了 flags，这里应该加上flag.Parse()
 	servers, channels := setupTestCase(t)
 	fmt.Printf("装配完毕\n")
-	time.Sleep(5 * time.Second)
+	time.Sleep(4 * time.Second)
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	done := false

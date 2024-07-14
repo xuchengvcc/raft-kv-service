@@ -20,6 +20,7 @@ package raft
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log"
 	"math/rand"
 	"net"
@@ -821,7 +822,7 @@ func (rf *Raftserver) Start(command *Op) (int64, int64, bool) {
 
 	// Your code here (3B).
 	if rf.role != Leader {
-		// DPrintf("Get %v(Leader: false) in Start after Lock", rf.me)
+		DPrintf("S %v is not Leader", rf.me)
 		return -1, -1, false
 	}
 
@@ -974,13 +975,13 @@ func (rf *Raftserver) ticker() {
 	}
 }
 
-func (rf *Raftserver) connectToPeers() bool {
+func (rf *Raftserver) connectToPeers() error {
 	failed := make([]int, 0)
 	for i, addr := range rf.peerAddrs {
 		if i == int(rf.me) {
 			continue
 		}
-		DPrintf("Try connect to %v: %s", i, addr)
+		DPrintf("Node Try connect to %v: %s", i, addr)
 		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 		if err != nil {
 			DPrintf("did not connect to %s: %v", addr, err)
@@ -989,6 +990,7 @@ func (rf *Raftserver) connectToPeers() bool {
 		}
 		if conn == nil {
 			DPrintf("No server at %s", addr)
+			return fmt.Errorf("no server listening at %s", addr)
 		}
 		rf.peers[i] = NewRaftClient(conn)
 	}
@@ -1005,13 +1007,13 @@ func (rf *Raftserver) connectToPeers() bool {
 		failed = failed[:len(failed)-1]
 	}
 
-	return true
+	return nil
 }
 
 func (rf *Raftserver) serve(lis net.Listener) {
 	s := grpc.NewServer()
 	RegisterRaftServer(s, rf)
-	DPrintf("sever %v listening at %v", rf.me, lis.Addr())
+	DPrintf("node %v listening at %v", rf.me, lis.Addr())
 	if err := s.Serve(lis); err != nil {
 		log.Fatalf("failed to serve: %v", err)
 	}
@@ -1069,8 +1071,17 @@ func Make(peerAddrs []string, me int32,
 	// Your initialization code here (3A, 3B, 3C).
 
 	// initialize from state persisted before a crash
-
-	go rf.serve(lis)
+	DPrintf("Init StateMachine %v", me)
+	go func() {
+		go rf.serve(lis)
+		time.Sleep(1 * time.Second)
+		err := rf.connectToPeers()
+		if err != nil {
+			panic(err)
+		}
+		time.Sleep(2 * time.Second)
+		rf.startWork()
+	}()
 
 	return rf
 }

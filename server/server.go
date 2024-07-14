@@ -1,22 +1,23 @@
-package kvraft
+package server
 
 import (
 	"bytes"
+	"context"
 	"log"
+	"net"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"raft-kv-service/raft"
 
-	"6.5840/labgob"
-	"6.5840/labrpc"
+	"raft-kv-service/labgob"
+
+	grpc "google.golang.org/grpc"
 )
 
 const RaftStateNumThreshold = 90
-const Debug = false
 const HandleTimeout = time.Duration(1000) * time.Millisecond
-const MaxMapLen = 10000
 
 const (
 	GET int32 = iota
@@ -36,16 +37,9 @@ func optype(op int32) string {
 	return "UNKNOWN"
 }
 
-func DPrintf(format string, a ...interface{}) (n int, err error) {
-	if Debug {
-		log.Printf(format, a...)
-	}
-	return
-}
-
 type result struct {
 	LastId  uint64
-	Err     Err
+	Err     string
 	Value   string
 	ResTerm int64 // commit时的Term
 }
@@ -53,27 +47,30 @@ type result struct {
 type KVServer struct {
 	mu      sync.Mutex
 	me      int32
-	rf      *raft.Raft
+	rf      *raft.Raftserver
 	applyCh chan raft.ApplyMsg
 	dead    int32 // set by Kill()
+	UnimplementedServiceServer
 
 	waitCh  map[int64]*chan result // 接收Raft提交条目的通道
 	history map[int32]result       // 存储此前的历史结果
 
 	maxraftstate int // snapshot if log grows this big
-	maxMapLen    int
 	db           map[string]string
 	lastApplied  int64 // apply的最后一个下标
 	persister    *raft.Persister
 	// Your definitions here.
 }
 
-func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
+func (kv *KVServer) Get(ctx context.Context, args *GetArgs) (*GetReply, error) {
 	// Your code here.
+	raft.DPrintf("Server %v Get Request", kv.me)
+	reply := &GetReply{}
 	_, isLeader := kv.rf.GetState()
 	if !isLeader {
 		reply.Err = ErrWrongLeader
-		return
+		return reply, nil
+		// return reply, errWrongLeader
 	}
 	opArgs := &raft.Op{
 		Optype:  GET,
@@ -84,15 +81,18 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	res := kv.HandleOp(opArgs)
 	reply.Err = res.Err
 	reply.Value = res.Value
-	DPrintf("%v Get( %v) Result(Err: %v, Key: %v, Value: %v)", kv.me, args.IncrId, res.Err, args.Key, res.Value)
+	raft.DPrintf("%v Get( %v) Result(Err: %v, Key: %v, Value: %v)", kv.me, args.IncrId, res.Err, args.Key, res.Value)
+	return reply, nil
 }
 
-func (kv *KVServer) Put(args *PutAppendArgs, reply *PutAppendReply) {
+func (kv *KVServer) Put(ctx context.Context, args *PutAppendArgs) (*PutAppendReply, error) {
 	// Your code here.
+	raft.DPrintf("Server %v Get Request", kv.me)
+	reply := &PutAppendReply{}
 	_, isLeader := kv.rf.GetState()
 	if !isLeader {
 		reply.Err = ErrWrongLeader
-		return
+		return reply, nil
 	}
 	opArgs := &raft.Op{
 		Optype:  PUT,
@@ -102,16 +102,20 @@ func (kv *KVServer) Put(args *PutAppendArgs, reply *PutAppendReply) {
 		Value:   args.Value,
 	}
 	res := kv.HandleOp(opArgs)
-	DPrintf("%v Put( %v) Result(Err: %v, Key: %v, Value: %v)", kv.me, args.IncrId, res.Err, args.Key, args.Value)
 	reply.Err = res.Err
+	raft.DPrintf("%v Put( %v) Result(Err: %v, Key: %v, Value: %v)", kv.me, args.IncrId, res.Err, args.Key, args.Value)
+	return reply, nil
 }
 
-func (kv *KVServer) Append(args *PutAppendArgs, reply *PutAppendReply) {
+func (kv *KVServer) Append(ctx context.Context, args *PutAppendArgs) (*PutAppendReply, error) {
 	// Your code here.
+	raft.DPrintf("Server %v Get Request", kv.me)
+	reply := &PutAppendReply{}
 	_, isLeader := kv.rf.GetState()
 	if !isLeader {
+		raft.DPrintf("KVServer %v is not Leader", kv.me)
 		reply.Err = ErrWrongLeader
-		return
+		return reply, nil
 	}
 	opArgs := &raft.Op{
 		Optype:  APPEND,
@@ -121,8 +125,9 @@ func (kv *KVServer) Append(args *PutAppendArgs, reply *PutAppendReply) {
 		Value:   args.Value,
 	}
 	res := kv.HandleOp(opArgs)
-	DPrintf("%v Append( %v) Result(Err: %v, Key: %v, Value: %v)", kv.me, args.IncrId, res.Err, args.Key, args.Value)
 	reply.Err = res.Err
+	raft.DPrintf("%v Append( %v) Result(Err: %v, Key: %v, Value: %v)", kv.me, args.IncrId, res.Err, args.Key, args.Value)
+	return reply, nil
 }
 
 func (kv *KVServer) HandleOp(opArgs *raft.Op) result {
@@ -140,7 +145,7 @@ func (kv *KVServer) HandleOp(opArgs *raft.Op) result {
 	kv.mu.Lock()
 	newCh := make(chan result, 1)
 	kv.waitCh[sIdx] = &newCh
-	// DPrintf("L %v Clerk %v IncrId %v create new Channel %p", kv.me, opArgs.ClerkId, opArgs.IncrId, &newCh)
+	// raft.DPrintf("L %v Clerk %v IncrId %v create new Channel %p", kv.me, opArgs.ClerkId, opArgs.IncrId, &newCh)
 	kv.mu.Unlock()
 
 	defer func() {
@@ -152,19 +157,19 @@ func (kv *KVServer) HandleOp(opArgs *raft.Op) result {
 
 	select {
 	case <-time.After(HandleTimeout):
-		DPrintf("L %v Clerk %v IncrId %v Timeout", kv.me, opArgs.ClerkId, opArgs.IncrId)
+		raft.DPrintf("L %v Clerk %v IncrId %v Timeout", kv.me, opArgs.ClerkId, opArgs.IncrId)
 		return result{Err: ErrHandleTimeout}
 	case msg, success := <-newCh:
 		if success && msg.ResTerm == sTerm {
-			// DPrintf("%v HandleOp Successful, ResTerm %v, Value: %v, Err: %v, LastId: %v", kv.me, msg.ResTerm, msg.Value, msg.Err, msg.LastId)
+			// raft.DPrintf("%v HandleOp Successful, ResTerm %v, Value: %v, Err: %v, LastId: %v", kv.me, msg.ResTerm, msg.Value, msg.Err, msg.LastId)
 			return msg
 		} else if !success {
 			// 通道关闭
-			DPrintf("L %v Clerk %v IncrId %v Channel Close", kv.me, opArgs.ClerkId, opArgs.IncrId)
+			raft.DPrintf("L %v Clerk %v IncrId %v Channel Close", kv.me, opArgs.ClerkId, opArgs.IncrId)
 			return result{Err: ErrChanClosed}
 		} else {
 			// 任期变更
-			DPrintf("L %v Clerk %v IncrId %v Leader Changed", kv.me, opArgs.ClerkId, opArgs.IncrId)
+			raft.DPrintf("L %v Clerk %v IncrId %v Leader Changed", kv.me, opArgs.ClerkId, opArgs.IncrId)
 			return result{Err: ErrLeaderChanged, Value: ""}
 		}
 	}
@@ -178,11 +183,11 @@ func (kv *KVServer) ApplyHandler() {
 		if _log.CommandValid {
 			// op, ok := _log.Command.(raft.Op)
 			// if !ok {
-			// 	DPrintf("L %v: Raft Log Convert Failed, Type Incompact", kv.me)
+			// 	raft.DPrintf("L %v: Raft Log Convert Failed, Type Incompact", kv.me)
 			// }
 			op := _log.Command
 			// else {
-			// 	DPrintf("L %v: Get the Command Successful", kv.me)
+			// 	raft.DPrintf("L %v: Get the Command Successful", kv.me)
 			// }
 			kv.mu.Lock()
 			if _log.CommandIndex <= kv.lastApplied {
@@ -205,7 +210,7 @@ func (kv *KVServer) ApplyHandler() {
 			}
 			// _, isLeader := kv.rf.GetState()
 			if need {
-				// DPrintf("%v DBExecute, IsLeader: %v", kv.me, isLeader)
+				// raft.DPrintf("%v DBExecute, IsLeader: %v", kv.me, isLeader)
 				res = kv.DBExecute(op)
 				res.ResTerm = _log.SnapshotTerm
 				kv.history[op.ClerkId] = res // 更新历史
@@ -222,7 +227,7 @@ func (kv *KVServer) ApplyHandler() {
 				func() {
 					defer func() {
 						if recover() != nil {
-							DPrintf("L %v ApplyHandler Find Clerk %v IncrId %v Channel Closed", kv.me, op.ClerkId, op.IncrId)
+							raft.DPrintf("L %v ApplyHandler Find Clerk %v IncrId %v Channel Closed", kv.me, op.ClerkId, op.IncrId)
 						}
 					}()
 					res.ResTerm = _log.SnapshotTerm
@@ -232,7 +237,7 @@ func (kv *KVServer) ApplyHandler() {
 			}
 			if kv.maxraftstate != -1 && kv.persister.RaftStateSize() >= kv.maxraftstate*RaftStateNumThreshold/100 {
 				//  TODO 生成快照
-				// DPrintf("RaftStateSize: %v", kv.persister.RaftStateSize())
+				// raft.DPrintf("RaftStateSize: %v", kv.persister.RaftStateSize())
 				snapshot := kv.Snapshot()
 				kv.rf.Snapshot(_log.CommandIndex, snapshot)
 			}
@@ -263,7 +268,7 @@ func (kv *KVServer) Snapshot() []byte {
 
 func (kv *KVServer) LoadSnapshot(snapshot []byte) {
 	if snapshot == nil || len(snapshot) < 1 {
-		DPrintf("%v Snapshot is Empty", kv.me)
+		raft.DPrintf("%v Snapshot is Empty", kv.me)
 		return
 	}
 
@@ -273,17 +278,17 @@ func (kv *KVServer) LoadSnapshot(snapshot []byte) {
 	db := make(map[string]string)
 	historyDb := make(map[int32]result)
 	if decoder.Decode(&db) != nil || decoder.Decode(&historyDb) != nil {
-		// DPrintf("%v Decode Snapshot Failed", kv.me)
+		// raft.DPrintf("%v Decode Snapshot Failed", kv.me)
 	} else {
 		kv.db = db
 		kv.history = historyDb
-		// DPrintf("%v Decode Snapshot Successfully", kv.me)
+		// raft.DPrintf("%v Decode Snapshot Successfully", kv.me)
 	}
 }
 
 func (kv *KVServer) DBExecute(op *raft.Op) (res result) {
 	// 需在加锁状态下调用
-	DPrintf("%v Execute DBExecute, IncrId: %v, %v(%v: %v)", kv.me, op.IncrId, optype(op.Optype), op.Key, op.Value)
+	raft.DPrintf("%v Execute DBExecute, IncrId: %v, %v(%v: %v)", kv.me, op.IncrId, optype(op.Optype), op.Key, op.Value)
 	res.LastId = op.IncrId
 	switch op.Optype {
 	case GET:
@@ -336,6 +341,15 @@ func (kv *KVServer) killed() bool {
 	return z == 1
 }
 
+func (kv *KVServer) serve(lis net.Listener) {
+	s := grpc.NewServer()
+	RegisterServiceServer(s, kv)
+	raft.DPrintf("Server %v listening at %v", kv.me, lis.Addr())
+	if err := s.Serve(lis); err != nil {
+		log.Fatalf("Server %v failed to serve: %v", kv.me, err)
+	}
+}
+
 // servers[] contains the ports of the set of
 // servers that will cooperate via Raft to
 // form the fault-tolerant key/value service.
@@ -348,7 +362,7 @@ func (kv *KVServer) killed() bool {
 // you don't need to snapshot.
 // StartKVServer() must return quickly, so it should start goroutines
 // for any long-running work.
-func StartKVServer(servers []*labrpc.ClientEnd, me int32, persister *raft.Persister, maxraftstate int) *KVServer {
+func StartKVServer(peerAddrs []string, me int32, persister *raft.Persister, addr string, lis net.Listener, slis net.Listener, maxraftstate int) *KVServer {
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
 	labgob.Register(raft.Op{})
@@ -362,17 +376,17 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int32, persister *raft.Persis
 	// You may need initialization code here.
 
 	kv.applyCh = make(chan raft.ApplyMsg)
-	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
+	kv.rf = raft.Make(peerAddrs, me, persister, kv.applyCh, addr, lis)
 
 	// You may need initialization code here.
 	kv.dead = 0
 	kv.history = make(map[int32]result)
 	kv.waitCh = map[int64]*chan result{}
-	kv.maxMapLen = MaxMapLen
 	kv.db = map[string]string{}
 	kv.mu.Lock()
 	kv.LoadSnapshot(persister.ReadSnapshot())
 	kv.mu.Unlock()
+	go kv.serve(slis)
 
 	go kv.ApplyHandler()
 
