@@ -387,7 +387,7 @@ func StartKVServer(peerAddrs []string, me int32, persister *raft.Persister, addr
 	kv.LoadSnapshot(persister.ReadSnapshot())
 	kv.mu.Unlock()
 	go kv.serve(slis)
-
+	go persister.SaveSchedule()
 	go kv.ApplyHandler()
 
 	return kv

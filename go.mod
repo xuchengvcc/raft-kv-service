@@ -3,6 +3,7 @@ module raft-kv-service
 go 1.22.3
 
 require (
+	github.com/boltdb/bolt v1.3.1 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	golang.org/x/net v0.27.0 // indirect
 	golang.org/x/sys v0.22.0 // indirect

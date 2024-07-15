@@ -9,22 +9,134 @@ package raft
 // test with the original before submitting.
 //
 
-import "sync"
+import (
+	"fmt"
+	"log"
+	"sync"
+	"time"
+
+	"github.com/boltdb/bolt"
+)
+
+const PersistTime = 10 * time.Second
 
 type Persister struct {
 	mu        sync.Mutex
+	dbName    string
+	snapName  string
+	statName  string
 	raftstate []byte
 	snapshot  []byte
 }
 
 func MakePersister() *Persister {
-	return &Persister{}
+	persister := &Persister{
+		dbName:   DBNAME,
+		snapName: SNAPNAME,
+		statName: STATNAME,
+	}
+	persister.initFromDisk()
+	return persister
 }
 
 func clone(orig []byte) []byte {
 	x := make([]byte, len(orig))
 	copy(x, orig)
 	return x
+}
+
+func (ps *Persister) initFromDisk() {
+	db, err := bolt.Open(ps.dbName, 0600, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	defer db.Close()
+	err = db.View(func(tx *bolt.Tx) error {
+		bsnap := tx.Bucket([]byte(ps.snapName))
+		bstat := tx.Bucket([]byte(ps.statName))
+		if bsnap == nil {
+			DPrintf("snapshot is nil in disk")
+		} else if value := bsnap.Get([]byte(ps.snapName)); value != nil {
+			DPrintf("init snapshot from disk")
+			ps.mu.Lock()
+			ps.snapshot = clone(value)
+			ps.mu.Unlock()
+		}
+
+		if bstat == nil {
+			DPrintf("state is nil in disk")
+		} else if value := bstat.Get([]byte(ps.statName)); value != nil {
+			DPrintf("init state from disk")
+			ps.mu.Lock()
+			ps.raftstate = clone(value)
+			ps.mu.Unlock()
+		}
+		return nil
+	})
+
+	if err != nil {
+		log.Fatal(err)
+	}
+	DPrintf("Init from disk successfully")
+
+}
+
+func (ps *Persister) SaveSchedule() {
+	for {
+		time.Sleep(PersistTime)
+		ps.saveToDisk()
+	}
+}
+
+func (ps *Persister) saveToDisk() {
+	db, err := bolt.Open(ps.dbName, 0600, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	// 创建一个桶（bucket）并保存数据
+	kS := []byte("snap")
+	kL := []byte("stat")
+
+	err = db.Update(func(tx *bolt.Tx) error {
+		// 创建一个桶（bucket）
+		b, err := tx.CreateBucketIfNotExists([]byte("snap"))
+		if err != nil {
+			return fmt.Errorf("create bucket err: %s", err)
+		}
+		ps.mu.Lock()
+		value := clone(ps.ReadSnapshot())
+		ps.mu.Unlock()
+		// 存储数据
+		if err := b.Put(kS, value); err != nil {
+			return fmt.Errorf("put value err: %s", err)
+		}
+		return nil
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	err = db.Update(func(tx *bolt.Tx) error {
+		// 创建一个桶（bucket）
+		b, err := tx.CreateBucketIfNotExists([]byte("stat"))
+		if err != nil {
+			return fmt.Errorf("create bucket err: %s", err)
+		}
+		ps.mu.Lock()
+		value := clone(ps.ReadRaftState())
+		ps.mu.Unlock()
+		// 存储数据
+		if err := b.Put(kL, value); err != nil {
+			return fmt.Errorf("put value err: %s", err)
+		}
+		return nil
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
 }
 
 func (ps *Persister) Copy() *Persister {
@@ -55,6 +167,7 @@ func (ps *Persister) Save(raftstate []byte, snapshot []byte) {
 	defer ps.mu.Unlock()
 	ps.raftstate = clone(raftstate)
 	ps.snapshot = clone(snapshot)
+	// go ps.saveToDisk()
 }
 
 func (ps *Persister) ReadSnapshot() []byte {

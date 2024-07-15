@@ -53,12 +53,20 @@ func TestBasic(t *testing.T) {
 	errorCount := 0
 	failedCount := 0
 	failedLoop := make([]int, 0)
+	for i := 0; i < 1000; i++ {
+		key := strconv.Itoa(i)
+		getValue, err := client.Get(key)
+		if err == nil {
+			result[key] = getValue
+		}
+	}
+
 	startTime := time.Now()
 	for i := 0; i < n; i++ {
 		randnum := rand.Float64()
 		key := strconv.Itoa(i % 1000)
 		value := strconv.Itoa(rand.Int())
-		// fmt.Printf("Testing Loop: %v\n", i)
+		fmt.Printf("Testing Loop: %v\n", i)
 		if randnum < 0.33 {
 			err := client.Put(key, value)
 			if err == nil {
