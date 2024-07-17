@@ -159,8 +159,10 @@ func (rf *Raftserver) GetState() (int64, bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	isleader := rf.role == Leader
-	term := rf.currentTerm
-	return term, isleader
+	// term := rf.currentTerm
+	// return term, isleader
+	commitIdx := rf.commitIndex
+	return commitIdx, isleader
 }
 
 func (rf *Raftserver) CommitCheck() {
@@ -381,7 +383,7 @@ func (rf *Raftserver) AppendEntries(ctx context.Context, args *AppendEntriesArgs
 	defer rf.mu.Unlock()
 	if args.Term < rf.currentTerm {
 		// 1. Reply false if term < currentTerm
-		// DPrintf("Illegal%v: L %v(T: %v, PreLogIdx: %v, PreLogTerm: %v) XXX F %v(T: %v, LastLogIdx: %v, LastLogTerm: %v)\n", AppendOrHeartbeat(args.Entries), args.LeaderId, args.Term, args.PrevLogIndex, args.PrevLogTerm, rf.me, rf.currentTerm, rf.LocalToGlobal(len(rf.log)-1), rf.log[len(rf.log)-1].Term)
+		DPrintf("Illegal: L %v(T: %v, PreLogIdx: %v, PreLogTerm: %v) XXX F %v(T: %v, LastLogIdx: %v, LastLogTerm: %v)\n", args.LeaderId, args.Term, args.PrevLogIndex, args.PrevLogTerm, rf.me, rf.currentTerm, rf.LocalToGlobal(int64(len(rf.log)-1)), rf.log[len(rf.log)-1].Term)
 		reply.Term = rf.currentTerm
 		// rf.mu.Unlock()
 		reply.Success = false
@@ -702,6 +704,60 @@ func (rf *Raftserver) sendInstallSnapshotToServer(server int) {
 	}
 	DPrintf("%v %v Reset Server %v NextIdx %v >>> %v", roleName(rf.role), rf.me, server, rf.nextIndex[server], max(rf.LocalToGlobal(1), rf.nextIndex[server]))
 	rf.nextIndex[server] = max(rf.LocalToGlobal(1), rf.nextIndex[server])
+}
+
+func (rf *Raftserver) sendBeatCh(server int, args *AppendEntriesArgs, ch chan bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	r, err := rf.peers[server].AppendEntries(ctx, args)
+	DPrintf("%v Send SingleHeartBeat to %v Get Reply:(Success: %v)", rf.me, server, r.Success)
+	if err != nil {
+		DPrintf("L %v Append to F %v Err: %v", rf.me, server, err)
+		ch <- false
+	} else {
+		ch <- r.Success
+	}
+}
+
+func (rf *Raftserver) SingleHeartBeat() bool {
+	rf.mu.Lock()
+	if rf.role != Leader {
+		rf.mu.Unlock()
+		return false
+	}
+	DPrintf("Send SingleHeartBeat...")
+	chs := make([]chan bool, len(rf.peers))
+	for i := 0; i < len(rf.peers); i++ {
+		if i == int(rf.me) {
+			continue
+		}
+		chs[i] = make(chan bool, 1)
+		args := &AppendEntriesArgs{
+			Term:         rf.currentTerm,
+			LeaderId:     rf.me,
+			PrevLogIndex: rf.nextIndex[i] - 1,
+			PrevLogTerm:  rf.log[rf.GlobalToLocal(rf.nextIndex[i]-1)].Term,
+			LeaderCommit: rf.commitIndex,
+		}
+
+		go rf.sendBeatCh(i, args, chs[i])
+	}
+	rf.mu.Unlock()
+	count := 1
+	for i := 0; i < len(rf.peers); i++ {
+		if i == int(rf.me) {
+			continue
+		}
+		ok := <-chs[i]
+		DPrintf("ok? %v", ok)
+		if ok {
+			count++
+		}
+		close(chs[i])
+	}
+	confirm := count > len(rf.peers)/2
+	DPrintf("Count: %v, Confirm Leader Situation? %v", count, confirm)
+	return confirm
 }
 
 func (rf *Raftserver) StartSendAppendEntries() {

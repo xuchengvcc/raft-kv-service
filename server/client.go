@@ -12,6 +12,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
+const maxRetryTime = 10
+
 var id int32 = 100
 var mu sync.Mutex
 
@@ -104,7 +106,7 @@ func (ck *Clerk) Get(key string) (string, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	retryTime := 100
+	retryTime := maxRetryTime
 	for {
 		raft.DPrintf("Clerk %v Send Get Request(Key: %v) to %v", ck.clerkId, key, ck.leader)
 		reply, err := ck.servers[ck.leader].Get(ctx, &args)
@@ -153,14 +155,15 @@ func (ck *Clerk) Put(key string, value string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	retryTime := 100
+	retryTime := maxRetryTime
 	for {
 		reply, err := ck.servers[ck.leader].Put(ctx, &args)
 		if err != nil {
 			raft.DPrintf("Client %v Put Err: %v", ck.clerkId, err)
+			return err
 			// return err
 		}
-		raft.DPrintf("Clerk %v Send %v Put Request(Key: %v,Value: %v), Err: %v", ck.clerkId, ck.leader, key, value, reply.Err)
+		// raft.DPrintf("Clerk %v Send %v Put Request(Key: %v,Value: %v), Err: %v", ck.clerkId, ck.leader, key, value, reply.Err)
 		retryTime--
 		if retryTime < 0 {
 			return errors.New("MaxRetry Times")
@@ -192,14 +195,14 @@ func (ck *Clerk) Append(key string, value string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	retryTime := 100
+	retryTime := maxRetryTime
 	for {
 		reply, err := ck.servers[ck.leader].Append(ctx, &args)
 		if err != nil {
 			raft.DPrintf("Client %v Append Err: %v", ck.clerkId, err)
-			// return err
+			return err
 		}
-		raft.DPrintf("Clerk %v Send %v Append Request(Key: %v,Value: %v), Err: %v", ck.clerkId, ck.leader, key, value, reply.Err)
+		// raft.DPrintf("Clerk %v Send %v Append Request(Key: %v,Value: %v), Err: %v", ck.clerkId, ck.leader, key, value, reply.Err)
 		retryTime--
 		if retryTime < 0 {
 			return errors.New("MaxRetry Times")

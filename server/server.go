@@ -17,7 +17,7 @@ import (
 )
 
 const RaftStateNumThreshold = 90
-const HandleTimeout = time.Duration(1000) * time.Millisecond
+const HandleTimeout = time.Duration(500) * time.Millisecond
 
 const (
 	GET int32 = iota
@@ -44,8 +44,15 @@ type result struct {
 	ResTerm int64 // commit时的Term
 }
 
+type readIdxOp struct {
+	Op        *raft.Op
+	ReadIdx   int64
+	ReadIdxCh *chan result
+}
+
 type KVServer struct {
 	mu      sync.Mutex
+	getmu   sync.Mutex
 	me      int32
 	rf      *raft.Raftserver
 	applyCh chan raft.ApplyMsg
@@ -60,13 +67,14 @@ type KVServer struct {
 	lastApplied  int64 // apply的最后一个下标
 	persister    *raft.Persister
 	// Your definitions here.
+	readIdxQue []*readIdxOp
 }
 
 func (kv *KVServer) Get(ctx context.Context, args *GetArgs) (*GetReply, error) {
 	// Your code here.
 	raft.DPrintf("Server %v Get Request", kv.me)
 	reply := &GetReply{}
-	_, isLeader := kv.rf.GetState()
+	commitIndex, isLeader := kv.rf.GetState()
 	if !isLeader {
 		reply.Err = ErrWrongLeader
 		return reply, nil
@@ -79,6 +87,33 @@ func (kv *KVServer) Get(ctx context.Context, args *GetArgs) (*GetReply, error) {
 		Key:     args.Key,
 	}
 	res := kv.HandleOp(opArgs)
+	raft.DPrintf("Server %v Handler Over %v", kv.me, res.ResTerm)
+	if res.ResTerm == -1 {
+		temp := make(chan result, 1)
+		raft.DPrintf("Server %v Prepare Send SingleHeartBeat", kv.me)
+		stillLeader := kv.rf.SingleHeartBeat()
+		raft.DPrintf("Server %v SingleHeartBeat Over stillLeader?%v", kv.me, stillLeader)
+		kv.getmu.Lock()
+		kv.readIdxQue = append(kv.readIdxQue, &readIdxOp{Op: opArgs, ReadIdx: commitIndex, ReadIdxCh: &temp})
+		kv.getmu.Unlock()
+		if stillLeader {
+			raft.DPrintf("Still Leader? %v", stillLeader)
+			go kv.processReadIndex(kv.lastApplied)
+			select {
+			case res = <-temp:
+				raft.DPrintf("Result %v", res)
+			case <-time.After(HandleTimeout):
+				res = result{Err: ErrHandleTimeout}
+			}
+			close(temp)
+		} else {
+			reply.Err = ErrWrongLeader
+			kv.getmu.Lock()
+			kv.readIdxQue = kv.readIdxQue[:0]
+			kv.getmu.Unlock()
+			return reply, nil
+		}
+	}
 	reply.Err = res.Err
 	reply.Value = res.Value
 	raft.DPrintf("%v Get( %v) Result(Err: %v, Key: %v, Value: %v)", kv.me, args.IncrId, res.Err, args.Key, res.Value)
@@ -87,7 +122,7 @@ func (kv *KVServer) Get(ctx context.Context, args *GetArgs) (*GetReply, error) {
 
 func (kv *KVServer) Put(ctx context.Context, args *PutAppendArgs) (*PutAppendReply, error) {
 	// Your code here.
-	raft.DPrintf("Server %v Get Request", kv.me)
+	raft.DPrintf("Server %v Put Request", kv.me)
 	reply := &PutAppendReply{}
 	_, isLeader := kv.rf.GetState()
 	if !isLeader {
@@ -109,7 +144,7 @@ func (kv *KVServer) Put(ctx context.Context, args *PutAppendArgs) (*PutAppendRep
 
 func (kv *KVServer) Append(ctx context.Context, args *PutAppendArgs) (*PutAppendReply, error) {
 	// Your code here.
-	raft.DPrintf("Server %v Get Request", kv.me)
+	raft.DPrintf("Server %v Append Request", kv.me)
 	reply := &PutAppendReply{}
 	_, isLeader := kv.rf.GetState()
 	if !isLeader {
@@ -137,6 +172,9 @@ func (kv *KVServer) HandleOp(opArgs *raft.Op) result {
 		return history
 	}
 	kv.mu.Unlock()
+	if opArgs.Optype == GET {
+		return result{ResTerm: -1}
+	}
 	sIdx, sTerm, isLeader := kv.rf.Start(opArgs)
 	if !isLeader {
 		return result{Err: ErrWrongLeader, Value: ""}
@@ -195,6 +233,10 @@ func (kv *KVServer) ApplyHandler() {
 				continue
 			}
 			kv.lastApplied = _log.CommandIndex
+
+			// TODO： CommandIndex 超过了lastApplied，处理ReadIndex队列
+			go kv.processReadIndex(_log.CommandIndex)
+
 			// 首先判断此 log 是否需要被应用
 			var res result
 			need := false
@@ -254,6 +296,19 @@ func (kv *KVServer) ApplyHandler() {
 			kv.mu.Unlock()
 		}
 	}
+}
+
+func (kv *KVServer) processReadIndex(commitIndex int64) {
+	i := 0
+	kv.getmu.Lock()
+	for ; i < len(kv.readIdxQue) && commitIndex >= kv.readIdxQue[i].ReadIdx; i++ {
+		kv.mu.Lock()
+		res := kv.DBExecute(kv.readIdxQue[i].Op)
+		kv.mu.Unlock()
+		*(kv.readIdxQue[i].ReadIdxCh) <- res
+	}
+	kv.readIdxQue = kv.readIdxQue[i:]
+	kv.getmu.Unlock()
 }
 
 func (kv *KVServer) Snapshot() []byte {
@@ -387,7 +442,7 @@ func StartKVServer(peerAddrs []string, me int32, persister *raft.Persister, addr
 	kv.LoadSnapshot(persister.ReadSnapshot())
 	kv.mu.Unlock()
 	go kv.serve(slis)
-	go persister.SaveSchedule()
+	// go persister.SaveSchedule()
 	go kv.ApplyHandler()
 
 	return kv

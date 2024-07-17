@@ -42,6 +42,7 @@ func setupTestCase(t *testing.T) ([]*KVServer, []string) {
 }
 
 func TestBasic(t *testing.T) {
+
 	fmt.Println("write setup code here...") // 测试之前的做一些设置
 	// 如果 TestMain 使用了 flags，这里应该加上flag.Parse()
 	_, addrs := setupTestCase(t)
