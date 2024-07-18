@@ -44,14 +44,10 @@ func setupTestCase(t *testing.T) ([]*KVServer, []string) {
 }
 
 func TestBasic(t *testing.T) {
-<<<<<<< HEAD
 	f, _ := os.Create("CPU.out")
 	defer f.Close()
 	pprof.StartCPUProfile(f)
 	defer pprof.StopCPUProfile()
-=======
-
->>>>>>> 240717-read-index
 	fmt.Println("write setup code here...") // 测试之前的做一些设置
 	// 如果 TestMain 使用了 flags，这里应该加上flag.Parse()
 	_, addrs := setupTestCase(t)

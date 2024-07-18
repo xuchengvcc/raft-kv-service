@@ -101,29 +101,17 @@ func (ps *Persister) initFromDisk() {
 
 // 	err = db.Update(func(tx *bolt.Tx) error {
 // 		// 创建一个桶（bucket）
-<<<<<<< HEAD
-=======
 // 		ps.mu.Lock()
->>>>>>> 240717-read-index
 // 		b, err := tx.CreateBucketIfNotExists([]byte("snap"))
 // 		if err != nil {
 // 			return fmt.Errorf("create bucket err: %s", err)
 // 		}
-<<<<<<< HEAD
-// 		ps.mu.Lock()
 // 		value := clone(ps.ReadSnapshot())
-// 		ps.mu.Unlock()
-=======
-// 		value := clone(ps.ReadSnapshot())
->>>>>>> 240717-read-index
 // 		// 存储数据
 // 		if err := b.Put(kS, value); err != nil {
 // 			return fmt.Errorf("put value err: %s", err)
 // 		}
-<<<<<<< HEAD
-=======
 // 		ps.mu.Unlock()
->>>>>>> 240717-read-index
 // 		return nil
 // 	})
 // 	if err != nil {

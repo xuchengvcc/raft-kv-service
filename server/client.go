@@ -165,10 +165,7 @@ func (ck *Clerk) Put(key string, value string) error {
 		if err != nil {
 			raft.DPrintf("Client %v Put Err: %v", ck.clerkId, err)
 			return err
-<<<<<<< HEAD
-=======
 			// return err
->>>>>>> 240717-read-index
 		}
 		if reply.Err != "" {
 			raft.DPrintf("Clerk %v Send %v Put Request(Key: %v,Value: %v), Err: %v", ck.clerkId, ck.leader, key, value, reply.Err)
@@ -210,12 +207,9 @@ func (ck *Clerk) Append(key string, value string) error {
 		if err != nil {
 			raft.DPrintf("Client %v Append Err: %v", ck.clerkId, err)
 			return err
-<<<<<<< HEAD
-=======
 		}
 		if reply.Err != "" {
 			raft.DPrintf("Clerk %v Send %v Append Request(Key: %v,Value: %v), Err: %v", ck.clerkId, ck.leader, key, value, reply.Err)
->>>>>>> 240717-read-index
 		}
 		retryTime--
 		if retryTime < 0 {
