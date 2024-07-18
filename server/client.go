@@ -102,7 +102,7 @@ func (ck *Clerk) Get(key string) (string, error) {
 		IncrId:  ck.getUid(),
 		ClerkId: ck.clerkId,
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	retryTime := 100
 	for {
@@ -110,7 +110,7 @@ func (ck *Clerk) Get(key string) (string, error) {
 		reply, err := ck.servers[ck.leader].Get(ctx, &args)
 		if err != nil {
 			raft.DPrintf("Client %v Get Err: %v", ck.clerkId, err)
-			// return err
+			return "", err
 		}
 		retryTime--
 		if retryTime < 0 {
@@ -151,14 +151,14 @@ func (ck *Clerk) Put(key string, value string) error {
 		IncrId:  ck.getUid(),
 		ClerkId: ck.clerkId,
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	retryTime := 100
 	for {
 		reply, err := ck.servers[ck.leader].Put(ctx, &args)
 		if err != nil {
 			raft.DPrintf("Client %v Put Err: %v", ck.clerkId, err)
-			// return err
+			return err
 		}
 		raft.DPrintf("Clerk %v Send %v Put Request(Key: %v,Value: %v), Err: %v", ck.clerkId, ck.leader, key, value, reply.Err)
 		retryTime--
@@ -190,14 +190,14 @@ func (ck *Clerk) Append(key string, value string) error {
 		IncrId:  ck.getUid(),
 		ClerkId: ck.clerkId,
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	retryTime := 100
 	for {
 		reply, err := ck.servers[ck.leader].Append(ctx, &args)
 		if err != nil {
 			raft.DPrintf("Client %v Append Err: %v", ck.clerkId, err)
-			// return err
+			return err
 		}
 		raft.DPrintf("Clerk %v Send %v Append Request(Key: %v,Value: %v), Err: %v", ck.clerkId, ck.leader, key, value, reply.Err)
 		retryTime--

@@ -10,7 +10,6 @@ package raft
 //
 
 import (
-	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -82,62 +81,62 @@ func (ps *Persister) initFromDisk() {
 
 }
 
-func (ps *Persister) SaveSchedule() {
-	for {
-		time.Sleep(PersistTime)
-		ps.saveToDisk()
-	}
-}
+// func (ps *Persister) SaveSchedule() {
+// 	for {
+// 		time.Sleep(PersistTime)
+// 		ps.saveToDisk()
+// 	}
+// }
 
-func (ps *Persister) saveToDisk() {
-	db, err := bolt.Open(ps.dbName, 0600, nil)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer db.Close()
+// func (ps *Persister) saveToDisk() {
+// 	db, err := bolt.Open(ps.dbName, 0600, nil)
+// 	if err != nil {
+// 		log.Fatal(err)
+// 	}
+// 	defer db.Close()
 
-	// 创建一个桶（bucket）并保存数据
-	kS := []byte("snap")
-	kL := []byte("stat")
+// 	// 创建一个桶（bucket）并保存数据
+// 	kS := []byte("snap")
+// 	kL := []byte("stat")
 
-	err = db.Update(func(tx *bolt.Tx) error {
-		// 创建一个桶（bucket）
-		b, err := tx.CreateBucketIfNotExists([]byte("snap"))
-		if err != nil {
-			return fmt.Errorf("create bucket err: %s", err)
-		}
-		ps.mu.Lock()
-		value := clone(ps.ReadSnapshot())
-		ps.mu.Unlock()
-		// 存储数据
-		if err := b.Put(kS, value); err != nil {
-			return fmt.Errorf("put value err: %s", err)
-		}
-		return nil
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
+// 	err = db.Update(func(tx *bolt.Tx) error {
+// 		// 创建一个桶（bucket）
+// 		b, err := tx.CreateBucketIfNotExists([]byte("snap"))
+// 		if err != nil {
+// 			return fmt.Errorf("create bucket err: %s", err)
+// 		}
+// 		ps.mu.Lock()
+// 		value := clone(ps.ReadSnapshot())
+// 		ps.mu.Unlock()
+// 		// 存储数据
+// 		if err := b.Put(kS, value); err != nil {
+// 			return fmt.Errorf("put value err: %s", err)
+// 		}
+// 		return nil
+// 	})
+// 	if err != nil {
+// 		log.Fatal(err)
+// 	}
 
-	err = db.Update(func(tx *bolt.Tx) error {
-		// 创建一个桶（bucket）
-		b, err := tx.CreateBucketIfNotExists([]byte("stat"))
-		if err != nil {
-			return fmt.Errorf("create bucket err: %s", err)
-		}
-		ps.mu.Lock()
-		value := clone(ps.ReadRaftState())
-		ps.mu.Unlock()
-		// 存储数据
-		if err := b.Put(kL, value); err != nil {
-			return fmt.Errorf("put value err: %s", err)
-		}
-		return nil
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-}
+// 	err = db.Update(func(tx *bolt.Tx) error {
+// 		// 创建一个桶（bucket）
+// 		b, err := tx.CreateBucketIfNotExists([]byte("stat"))
+// 		if err != nil {
+// 			return fmt.Errorf("create bucket err: %s", err)
+// 		}
+// 		ps.mu.Lock()
+// 		value := clone(ps.ReadRaftState())
+// 		ps.mu.Unlock()
+// 		// 存储数据
+// 		if err := b.Put(kL, value); err != nil {
+// 			return fmt.Errorf("put value err: %s", err)
+// 		}
+// 		return nil
+// 	})
+// 	if err != nil {
+// 		log.Fatal(err)
+// 	}
+// }
 
 func (ps *Persister) Copy() *Persister {
 	ps.mu.Lock()
