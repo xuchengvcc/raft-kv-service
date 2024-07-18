@@ -1,2 +1,3 @@
 /rpc/examples
 /rpc/helloworld
+*.log

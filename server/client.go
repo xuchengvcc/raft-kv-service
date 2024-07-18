@@ -12,11 +12,13 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
+const maxRetryTime = 50
+
 var id int32 = 100
 var mu sync.Mutex
 
 const RPCRetryTime = time.Millisecond * 5
-const WrongLeaderRetryTime = time.Millisecond * 2
+const WrongLeaderRetryTime = time.Millisecond * 3
 
 type Clerk struct {
 	servers []ServiceClient
@@ -104,7 +106,7 @@ func (ck *Clerk) Get(key string) (string, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	retryTime := 100
+	retryTime := maxRetryTime
 	for {
 		raft.DPrintf("Clerk %v Send Get Request(Key: %v) to %v", ck.clerkId, key, ck.leader)
 		reply, err := ck.servers[ck.leader].Get(ctx, &args)
@@ -112,12 +114,16 @@ func (ck *Clerk) Get(key string) (string, error) {
 			raft.DPrintf("Client %v Get Err: %v", ck.clerkId, err)
 			return "", err
 		}
+		if reply.Err != "" {
+			raft.DPrintf("Clerk %v Send %v Get Request(Key: %v), Err: %v", ck.clerkId, ck.leader, key, reply.Err)
+		}
 		retryTime--
 		if retryTime < 0 {
 			return reply.Value, errors.New("MaxRetry Times")
 		}
 		if reply.Err == ErrWrongLeader || reply.Err == ErrLeaderChanged {
 			ck.leader = (ck.leader + 1) % len(ck.servers)
+			time.Sleep(WrongLeaderRetryTime)
 			continue
 		}
 		switch reply.Err {
@@ -153,21 +159,27 @@ func (ck *Clerk) Put(key string, value string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	retryTime := 100
+	retryTime := maxRetryTime
 	for {
 		reply, err := ck.servers[ck.leader].Put(ctx, &args)
 		if err != nil {
 			raft.DPrintf("Client %v Put Err: %v", ck.clerkId, err)
 			return err
+<<<<<<< HEAD
+=======
+			// return err
+>>>>>>> 240717-read-index
 		}
-		raft.DPrintf("Clerk %v Send %v Put Request(Key: %v,Value: %v), Err: %v", ck.clerkId, ck.leader, key, value, reply.Err)
+		if reply.Err != "" {
+			raft.DPrintf("Clerk %v Send %v Put Request(Key: %v,Value: %v), Err: %v", ck.clerkId, ck.leader, key, value, reply.Err)
+		}
 		retryTime--
 		if retryTime < 0 {
 			return errors.New("MaxRetry Times")
 		}
 		if reply.Err == ErrWrongLeader || reply.Err == ErrLeaderChanged {
 			ck.leader = (ck.leader + 1) % len(ck.servers)
-			// time.Sleep(RPCRetryTime)
+			time.Sleep(WrongLeaderRetryTime)
 			continue
 		}
 		switch reply.Err {
@@ -192,21 +204,26 @@ func (ck *Clerk) Append(key string, value string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	retryTime := 100
+	retryTime := maxRetryTime
 	for {
 		reply, err := ck.servers[ck.leader].Append(ctx, &args)
 		if err != nil {
 			raft.DPrintf("Client %v Append Err: %v", ck.clerkId, err)
 			return err
+<<<<<<< HEAD
+=======
 		}
-		raft.DPrintf("Clerk %v Send %v Append Request(Key: %v,Value: %v), Err: %v", ck.clerkId, ck.leader, key, value, reply.Err)
+		if reply.Err != "" {
+			raft.DPrintf("Clerk %v Send %v Append Request(Key: %v,Value: %v), Err: %v", ck.clerkId, ck.leader, key, value, reply.Err)
+>>>>>>> 240717-read-index
+		}
 		retryTime--
 		if retryTime < 0 {
 			return errors.New("MaxRetry Times")
 		}
 		if reply.Err == ErrWrongLeader || reply.Err == ErrLeaderChanged {
 			ck.leader = (ck.leader + 1) % len(ck.servers)
-			// time.Sleep(RPCRetryTime)
+			time.Sleep(WrongLeaderRetryTime)
 			continue
 		}
 		switch reply.Err {

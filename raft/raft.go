@@ -159,8 +159,10 @@ func (rf *Raftserver) GetState() (int64, bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	isleader := rf.role == Leader
-	term := rf.currentTerm
-	return term, isleader
+	// term := rf.currentTerm
+	// return term, isleader
+	commitIdx := rf.commitIndex
+	return commitIdx, isleader
 }
 
 func (rf *Raftserver) CommitCheck() {
@@ -381,7 +383,7 @@ func (rf *Raftserver) AppendEntries(ctx context.Context, args *AppendEntriesArgs
 	defer rf.mu.Unlock()
 	if args.Term < rf.currentTerm {
 		// 1. Reply false if term < currentTerm
-		// DPrintf("Illegal%v: L %v(T: %v, PreLogIdx: %v, PreLogTerm: %v) XXX F %v(T: %v, LastLogIdx: %v, LastLogTerm: %v)\n", AppendOrHeartbeat(args.Entries), args.LeaderId, args.Term, args.PrevLogIndex, args.PrevLogTerm, rf.me, rf.currentTerm, rf.LocalToGlobal(len(rf.log)-1), rf.log[len(rf.log)-1].Term)
+		DPrintf("Illegal: L %v(T: %v, PreLogIdx: %v, PreLogTerm: %v) XXX F %v(T: %v, LastLogIdx: %v, LastLogTerm: %v)\n", args.LeaderId, args.Term, args.PrevLogIndex, args.PrevLogTerm, rf.me, rf.currentTerm, rf.LocalToGlobal(int64(len(rf.log)-1)), rf.log[len(rf.log)-1].Term)
 		reply.Term = rf.currentTerm
 		// rf.mu.Unlock()
 		reply.Success = false
@@ -520,10 +522,11 @@ func (rf *Raftserver) sendAppendEntriesToServer(server int, args *AppendEntriesA
 		for commitLastLog > rf.commitIndex {
 			// 找到一个提交超过半数的日志
 			count := 1
-			for i := 0; i < len(rf.peers); i++ {
-				if i == int(rf.me) {
-					continue
-				}
+			// for i := 0; i < len(rf.peers); i++ {
+			// 	if i == int(rf.me) {
+			// 		continue
+			// 	}
+			for i := range rf.peers {
 				// 加了 rf.log[commitLastLog].Term == rf.currentTerm，只有当前任期的日志才能提交
 				if rf.matchIndex[i] >= commitLastLog && rf.log[rf.GlobalToLocal(commitLastLog)].Term == rf.currentTerm {
 					count++
@@ -543,7 +546,7 @@ func (rf *Raftserver) sendAppendEntriesToServer(server int, args *AppendEntriesA
 	}
 
 	if reply.Term > rf.currentTerm {
-		// DPrintf("Old Leader %v(T: %v,LastLogI: %v,LastLogT: %v) Received Reply(T: %v), Convert to Follower", rf.me, rf.currentTerm, rf.LocalToGlobal(len(rf.log)-1), rf.log[len(rf.log)-1].Term, reply.Term)
+		DPrintf("Old Leader %v(T: %v,LastLogI: %v,LastLogT: %v) Received Reply(T: %v), Convert to Follower", rf.me, rf.currentTerm, rf.LocalToGlobal(int64(len(rf.log)-1)), rf.log[len(rf.log)-1].Term, reply.Term)
 		rf.currentTerm = reply.Term
 		rf.votedFor = -1
 		rf.persist()
@@ -704,6 +707,55 @@ func (rf *Raftserver) sendInstallSnapshotToServer(server int) {
 	rf.nextIndex[server] = max(rf.LocalToGlobal(1), rf.nextIndex[server])
 }
 
+func (rf *Raftserver) sendBeatCh(server int, args *AppendEntriesArgs, ch chan bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	r, err := rf.peers[server].AppendEntries(ctx, args)
+	DPrintf("%v Send SingleHeartBeat to %v Get Reply:(Success: %v)", rf.me, server, r.Success)
+	if err != nil {
+		DPrintf("L %v Append to F %v Err: %v", rf.me, server, err)
+		ch <- false
+	} else {
+		ch <- r.Success
+	}
+}
+
+func (rf *Raftserver) SingleHeartBeat() bool {
+	rf.mu.Lock()
+	if rf.role != Leader {
+		rf.mu.Unlock()
+		return false
+	}
+	DPrintf("Send SingleHeartBeat...")
+	chs := make(map[int]chan bool, len(rf.peers))
+	// for i := 0; i < len(rf.peers); i++ {
+	for i := range rf.peers {
+		chs[i] = make(chan bool, 1)
+		args := &AppendEntriesArgs{
+			Term:         rf.currentTerm,
+			LeaderId:     rf.me,
+			PrevLogIndex: rf.nextIndex[i] - 1,
+			PrevLogTerm:  rf.log[rf.GlobalToLocal(rf.nextIndex[i]-1)].Term,
+			LeaderCommit: rf.commitIndex,
+		}
+
+		go rf.sendBeatCh(i, args, chs[i])
+	}
+	rf.mu.Unlock()
+	count := 1
+	for i := range rf.peers {
+		ok := <-chs[i]
+		DPrintf("ok? %v", ok)
+		if ok {
+			count++
+		}
+		close(chs[i])
+	}
+	confirm := count > len(rf.peers)/2
+	DPrintf("Count: %v, Confirm Leader Situation? %v", count, confirm)
+	return confirm
+}
+
 func (rf *Raftserver) StartSendAppendEntries() {
 	// DPrintf("server_%v tries to send heartbeat\n", rf.me)
 	for !rf.killed() {
@@ -715,11 +767,11 @@ func (rf *Raftserver) StartSendAppendEntries() {
 			return
 		}
 		// DPrintf("L %v StartSendAppendEntries get the Lock\n", rf.me)
-
-		for i := 0; i < len(rf.peers); i++ {
-			if i == int(rf.me) {
-				continue
-			}
+		for i := range rf.peers {
+			// for i := 0; i < len(rf.peers); i++ {
+			// if i == int(rf.me) {
+			// 	continue
+			// }
 			// DPrintf("Prepare Send AppendEntries, nextIdx: %v, lastIncludedIndex: %v, global :%v", rf.nextIndex[i], rf.lastIncludedIndex, rf.GlobalToLocal(rf.nextIndex[i]-1))
 			args := &AppendEntriesArgs{
 				Term:         rf.currentTerm,
@@ -739,6 +791,8 @@ func (rf *Raftserver) StartSendAppendEntries() {
 				args.Entries = append([]*Entry{}, rf.log[rf.GlobalToLocal(rf.nextIndex[i]):]...)
 				// args.Entries = rf.log[rf.GlobalToLocal(rf.nextIndex[i]):]
 				DPrintf("AppendEntries: L %v(T: %v,I: %v) >>> F %v\n", rf.me, rf.currentTerm, rf.nextIndex[i], i)
+			} else {
+				DPrintf("HeartBeats: L %v(T: %v,I: %v) >>> F %v\n", rf.me, rf.currentTerm, rf.nextIndex[i], i)
 			}
 
 			if installSnapshot {
@@ -865,6 +919,7 @@ func (rf *Raftserver) procVoteAnswer(server int, args *RequestVoteArgs) bool {
 	}
 
 	rf.mu.Lock()
+	DPrintf("%v %v Vote Result: %v: %v", roleName(rf.role), rf.me, server, reply.VoteGranted)
 	defer rf.mu.Unlock()
 
 	if rf.role != Candidate || args.Term != rf.currentTerm {
@@ -946,10 +1001,11 @@ func (rf *Raftserver) StartElection() {
 	}
 	// rf.mu.Unlock()
 
-	for i := 0; i < len(rf.peers); i++ {
-		if i == int(rf.me) {
-			continue
-		}
+	// for i := 0; i < len(rf.peers); i++ {
+	for i := range rf.peers {
+		// if i == int(rf.me) {
+		// 	continue
+		// }
 		go rf.collectVote(i, args)
 	}
 }
@@ -970,7 +1026,7 @@ func (rf *Raftserver) ticker() {
 		rf.mu.Unlock()
 		// pause for a random amount of time between 50 and 350
 		// milliseconds.
-		ms := 50 + (rand.Int63() % 300)
+		ms := 50 + (rand.Int63() % 200)
 		time.Sleep(time.Duration(ms) * time.Millisecond)
 	}
 }
@@ -981,7 +1037,7 @@ func (rf *Raftserver) connectToPeers() error {
 		if i == int(rf.me) {
 			continue
 		}
-		DPrintf("Node Try connect to %v: %s", i, addr)
+		DPrintf("Node %v Try connect to %v: %s", rf.me, i, addr)
 		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 		if err != nil {
 			DPrintf("did not connect to %s: %v", addr, err)
@@ -999,7 +1055,7 @@ func (rf *Raftserver) connectToPeers() error {
 		i := failed[len(failed)-1]
 		conn, err := grpc.NewClient(rf.peerAddrs[i], grpc.WithTransportCredentials(insecure.NewCredentials()))
 		if err != nil {
-			log.Printf("Retry connect to %s: %v", rf.peerAddrs[i], err)
+			log.Printf("Node %v Retry connect to %s: %v", rf.me, rf.peerAddrs[i], err)
 			time.Sleep(500 * time.Millisecond)
 			continue
 		}
@@ -1028,6 +1084,7 @@ func (rf *Raftserver) startWork() {
 		rf.nextIndex[i] = rf.LocalToGlobal(int64(len(rf.log)))
 	}
 	// start ticker goroutine to start elections
+	DPrintf("Node %v Has %v peers: %v", rf.me, len(rf.peers), rf.peers)
 	go rf.ticker()
 	go rf.CommitCheck()
 }
