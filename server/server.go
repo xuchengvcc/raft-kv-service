@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"raft-kv-service/pool"
 	"raft-kv-service/raft"
 
 	"raft-kv-service/labgob"
@@ -59,6 +60,7 @@ type KVServer struct {
 	dead    int32 // set by Kill()
 	UnimplementedServiceServer
 
+	cp      *pool.ChannelPool[result]
 	waitCh  map[int64]*chan result // 接收Raft提交条目的通道
 	history map[int32]result       // 存储此前的历史结果
 
@@ -89,7 +91,8 @@ func (kv *KVServer) Get(ctx context.Context, args *GetArgs) (*GetReply, error) {
 	res := kv.HandleOp(opArgs)
 	raft.DPrintf("Server %v Handler Over %v", kv.me, res.ResTerm)
 	if res.ResTerm == -1 {
-		temp := make(chan result, 1)
+		// temp := make(chan result, 1)
+		temp := kv.cp.Get()
 		raft.DPrintf("Server %v Prepare Send SingleHeartBeat", kv.me)
 		stillLeader := kv.rf.SingleHeartBeat()
 		raft.DPrintf("Server %v SingleHeartBeat Over stillLeader?%v", kv.me, stillLeader)
@@ -106,9 +109,11 @@ func (kv *KVServer) Get(ctx context.Context, args *GetArgs) (*GetReply, error) {
 				res.Err = ErrHandleTimeout
 			}
 			kv.getmu.Lock()
-			close(temp)
+			// close(temp)
+			kv.cp.Put(temp)
 			kv.getmu.Unlock()
 		} else {
+			kv.cp.Put(temp)
 			reply.Err = ErrWrongLeader
 			kv.getmu.Lock()
 			kv.readIdxQue = kv.readIdxQue[:0]
@@ -183,7 +188,8 @@ func (kv *KVServer) HandleOp(opArgs *raft.Op) result {
 	}
 
 	kv.mu.Lock()
-	newCh := make(chan result, 1)
+	// newCh := make(chan result, 1)
+	newCh := kv.cp.Get()
 	kv.waitCh[sIdx] = &newCh
 	// raft.DPrintf("L %v Clerk %v IncrId %v create new Channel %p", kv.me, opArgs.ClerkId, opArgs.IncrId, &newCh)
 	kv.mu.Unlock()
@@ -191,7 +197,8 @@ func (kv *KVServer) HandleOp(opArgs *raft.Op) result {
 	defer func() {
 		kv.mu.Lock()
 		delete(kv.waitCh, sIdx)
-		close(newCh)
+		// close(newCh)
+		kv.cp.Put(newCh)
 		kv.mu.Unlock()
 	}()
 
@@ -298,6 +305,7 @@ func (kv *KVServer) ApplyHandler() {
 			kv.mu.Unlock()
 		}
 	}
+	defer kv.cp.Close()
 }
 
 func (kv *KVServer) processReadIndex(commitIndex int64) {
@@ -432,6 +440,7 @@ func StartKVServer(peerAddrs []string, me int32, persister *raft.Persister, addr
 
 	// You may need initialization code here.
 
+	kv.cp = pool.NewChannelPool[result](5)
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(peerAddrs, me, persister, kv.applyCh, addr, lis)
 
