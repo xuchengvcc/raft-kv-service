@@ -103,9 +103,11 @@ func (kv *KVServer) Get(ctx context.Context, args *GetArgs) (*GetReply, error) {
 			case res = <-temp:
 				raft.DPrintf("Result %v", res)
 			case <-time.After(HandleTimeout):
-				res = result{Err: ErrHandleTimeout}
+				res.Err = ErrHandleTimeout
 			}
+			kv.getmu.Lock()
 			close(temp)
+			kv.getmu.Unlock()
 		} else {
 			reply.Err = ErrWrongLeader
 			kv.getmu.Lock()
