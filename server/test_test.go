@@ -111,10 +111,11 @@ func TestBasic(t *testing.T) {
 		}
 	}
 
-	if errorCount > 0 {
-		t.Fatalf("Test Failed")
-	}
 	fmt.Printf("Spend Time: %v\n", time.Since(startTime))
 	fmt.Printf("Operation Failed: %v\n", failedCount)
 	fmt.Printf("Operation Failed Loop: %v\n", failedLoop)
+	if errorCount > 0 {
+		fmt.Printf("Error Get: %v Times", errorCount)
+		t.Fatalf("Test Failed")
+	}
 }

@@ -36,7 +36,7 @@ import (
 
 const ImmidiateTime = 3
 const HeartbeatTime = 50
-const ElectionTimeoutRangeBottom = 150
+const ElectionTimeoutRangeBottom = 100
 const ElectionTimeoutRangeTop = 300
 const CheckTimeInter = 15
 
@@ -47,7 +47,7 @@ func RandomElectionTimeout() int {
 func HeartbeatTimeThreshold() int {
 	// return (int)(HeartbeatTime * 1.5) // + rand.Intn(HeartbeatTime)
 	// return HeartbeatTime + rand.Intn(HeartbeatTime)
-	return ElectionTimeoutRangeTop + rand.Intn(HeartbeatTime)
+	return ElectionTimeoutRangeTop + rand.Intn(ElectionTimeoutRangeBottom)
 }
 
 const (
