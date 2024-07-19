@@ -742,6 +742,7 @@ func (rf *Raftserver) SingleHeartBeat() bool {
 		go rf.sendBeatCh(i, args, chs[i])
 	}
 	rf.mu.Unlock()
+	rf.ResetHeartTimer(HeartbeatTime)
 	count := 1
 	for i := range rf.peers {
 		ok := <-chs[i]
