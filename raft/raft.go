@@ -633,7 +633,7 @@ func (rf *Raftserver) InstallSnapshot(ctx context.Context, args *InstallSnapshot
 		rf.log = rf.log[rIdx:]
 	} else {
 		// DPrintf("%v %v don't has Log in Snapshot, Clear Log", roleName(rf.role), rf.me)
-		rf.log = make([]*Entry, 0)
+		rf.log = make([]*Entry, 1)
 		rf.log = append(rf.log, &Entry{Term: args.LastIncludedTerm, Command: args.LastIncludedCommand})
 	}
 
