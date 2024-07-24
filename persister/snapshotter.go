@@ -3,7 +3,6 @@ package persister
 import (
 	"errors"
 	"fmt"
-	"hash/crc32"
 	"os"
 	"path/filepath"
 	"sort"
@@ -16,8 +15,6 @@ import (
 const snapSuffix = ".snap"
 
 var (
-	crcTable = crc32.MakeTable(crc32.Castagnoli)
-
 	validFiles = map[string]bool{
 		"db": true,
 	}
@@ -29,8 +26,9 @@ var (
 )
 
 type Snapshotter struct {
-	lg  *zap.Logger
-	dir string
+	lg      *zap.Logger
+	dir     string
+	LastIdx int64
 }
 
 func NewSnapshotter(lg *zap.Logger, dir string) *Snapshotter {
@@ -51,7 +49,7 @@ func (s *Snapshotter) SaveSnap(snapshot *Snapshot) error {
 }
 
 func (s *Snapshotter) save(snapshot *Snapshot) error {
-	fname := fmt.Sprintf("%016x-%016x%s", snapshot.LastTerm, snapshot.LastTerm, snapSuffix)
+	fname := fmt.Sprintf("%016x-%016x%s", snapshot.LastTerm, snapshot.LastIndex, snapSuffix)
 	b, err := proto.Marshal(snapshot)
 	if err != nil {
 		panic(fmt.Sprintf("Marshalling error: %s", err))

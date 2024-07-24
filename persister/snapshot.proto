@@ -13,3 +13,10 @@ message State {
     int32 votedFor = 1;
     int64 currentTerm = 2;
 }
+
+message IndexState {
+    int64 firstIndex = 1;
+    int64 lastIndex = 2;
+    int64 lastCommitIndex = 3;
+    State raftSate = 4;
+}

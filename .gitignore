@@ -1,3 +1,8 @@
 /rpc/examples
 /rpc/helloworld
 *.log
+/server/log*
+/server/snap*
+/server/stat*
+/server/test_logs/*
+/server/CPU*.out

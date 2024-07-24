@@ -9,8 +9,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"raft-kv-service/persister"
 	"raft-kv-service/pool"
 	"raft-kv-service/raft"
+	rrpc "raft-kv-service/rpc"
 
 	"raft-kv-service/labgob"
 
@@ -18,7 +20,7 @@ import (
 )
 
 const RaftStateNumThreshold = 90
-const HandleTimeout = time.Duration(500) * time.Millisecond
+const HandleTimeout = time.Duration(1000) * time.Millisecond
 
 const (
 	GET int32 = iota
@@ -46,7 +48,7 @@ type result struct {
 }
 
 type readIdxOp struct {
-	Op        *raft.Op
+	Op        *rrpc.Op
 	ReadIdx   int64
 	ReadIdxCh *chan result
 }
@@ -67,7 +69,7 @@ type KVServer struct {
 	maxraftstate int // snapshot if log grows this big
 	db           map[string]string
 	lastApplied  int64 // apply的最后一个下标
-	persister    *raft.Persister
+	persister    *persister.Persister
 	// Your definitions here.
 	readIdxQue []*readIdxOp
 }
@@ -82,7 +84,7 @@ func (kv *KVServer) Get(ctx context.Context, args *GetArgs) (*GetReply, error) {
 		return reply, nil
 		// return reply, errWrongLeader
 	}
-	opArgs := &raft.Op{
+	opArgs := &rrpc.Op{
 		Optype:  GET,
 		IncrId:  args.IncrId,
 		ClerkId: args.ClerkId,
@@ -136,7 +138,7 @@ func (kv *KVServer) Put(ctx context.Context, args *PutAppendArgs) (*PutAppendRep
 		reply.Err = ErrWrongLeader
 		return reply, nil
 	}
-	opArgs := &raft.Op{
+	opArgs := &rrpc.Op{
 		Optype:  PUT,
 		IncrId:  args.IncrId,
 		ClerkId: args.ClerkId,
@@ -159,7 +161,7 @@ func (kv *KVServer) Append(ctx context.Context, args *PutAppendArgs) (*PutAppend
 		reply.Err = ErrWrongLeader
 		return reply, nil
 	}
-	opArgs := &raft.Op{
+	opArgs := &rrpc.Op{
 		Optype:  APPEND,
 		IncrId:  args.IncrId,
 		ClerkId: args.ClerkId,
@@ -172,7 +174,7 @@ func (kv *KVServer) Append(ctx context.Context, args *PutAppendArgs) (*PutAppend
 	return reply, nil
 }
 
-func (kv *KVServer) HandleOp(opArgs *raft.Op) result {
+func (kv *KVServer) HandleOp(opArgs *rrpc.Op) result {
 	kv.mu.Lock()
 	if history, exist := kv.history[opArgs.ClerkId]; exist && history.LastId == opArgs.IncrId {
 		kv.mu.Unlock()
@@ -249,6 +251,13 @@ func (kv *KVServer) ApplyHandler() {
 			// 首先判断此 log 是否需要被应用
 			var res result
 			need := false
+			if kv.history == nil {
+				log.Fatal("kv.history is nil")
+			}
+			if op == nil {
+				raft.DPrintf("log: %v", _log)
+				log.Fatal("op is nil")
+			}
 			if clerkMap, exist := kv.history[op.ClerkId]; exist {
 				if clerkMap.LastId == op.IncrId {
 					// 用历史记录
@@ -264,6 +273,7 @@ func (kv *KVServer) ApplyHandler() {
 				// raft.DPrintf("%v DBExecute, IsLeader: %v", kv.me, isLeader)
 				res = kv.DBExecute(op)
 				res.ResTerm = _log.SnapshotTerm
+				raft.DPrintf("%v Execute result: %v Update to history", kv.me, res)
 				kv.history[op.ClerkId] = res // 更新历史
 			}
 			// if !isLeader {
@@ -351,7 +361,7 @@ func (kv *KVServer) LoadSnapshot(snapshot []byte) {
 	}
 }
 
-func (kv *KVServer) DBExecute(op *raft.Op) (res result) {
+func (kv *KVServer) DBExecute(op *rrpc.Op) (res result) {
 	// 需在加锁状态下调用
 	raft.DPrintf("%v Execute DBExecute, IncrId: %v, %v(%v: %v)", kv.me, op.IncrId, optype(op.Optype), op.Key, op.Value)
 	res.LastId = op.IncrId
@@ -427,10 +437,10 @@ func (kv *KVServer) serve(lis net.Listener) {
 // you don't need to snapshot.
 // StartKVServer() must return quickly, so it should start goroutines
 // for any long-running work.
-func StartKVServer(peerAddrs []string, me int32, persister *raft.Persister, addr string, lis net.Listener, slis net.Listener, maxraftstate int) *KVServer {
+func StartKVServer(peerAddrs []string, me int32, persister *persister.Persister, addr string, lis net.Listener, slis net.Listener, maxraftstate int) *KVServer {
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
-	labgob.Register(raft.Op{})
+	labgob.Register(rrpc.Op{})
 
 	kv := new(KVServer)
 	kv.me = me
@@ -450,7 +460,8 @@ func StartKVServer(peerAddrs []string, me int32, persister *raft.Persister, addr
 	kv.waitCh = map[int64]*chan result{}
 	kv.db = map[string]string{}
 	kv.mu.Lock()
-	kv.LoadSnapshot(persister.ReadSnapshot())
+	snap, _, _ := persister.ReadSnapshot()
+	kv.LoadSnapshot(snap)
 	kv.mu.Unlock()
 	go kv.serve(slis)
 	// go persister.SaveSchedule()

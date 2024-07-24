@@ -18,7 +18,6 @@ package raft
 //
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"log"
@@ -28,14 +27,15 @@ import (
 	"sync/atomic"
 	"time"
 
-	"raft-kv-service/labgob"
+	"raft-kv-service/persister"
+	rrpc "raft-kv-service/rpc"
 
 	grpc "google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
 const ImmidiateTime = 3
-const HeartbeatTime = 50
+const HeartbeatTime = 80
 const ElectionTimeoutRangeBottom = 100
 const ElectionTimeoutRangeTop = 300
 const CheckTimeInter = 15
@@ -47,7 +47,7 @@ func RandomElectionTimeout() int {
 func HeartbeatTimeThreshold() int {
 	// return (int)(HeartbeatTime * 1.5) // + rand.Intn(HeartbeatTime)
 	// return HeartbeatTime + rand.Intn(HeartbeatTime)
-	return ElectionTimeoutRangeTop + rand.Intn(ElectionTimeoutRangeBottom)
+	return HeartbeatTime*5 + rand.Intn(HeartbeatTime*5)
 }
 
 const (
@@ -69,7 +69,7 @@ func roleName(idx int32) string {
 	}
 }
 
-func AppendOrHeartbeat(entries []Entry) string {
+func AppendOrHeartbeat(entries []rrpc.Entry) string {
 	if entries == nil {
 		return "Heartbeat"
 	} else {
@@ -101,7 +101,7 @@ func (rf *Raftserver) LocalToGlobal(localIndex int64) int64 {
 // other uses.
 type ApplyMsg struct {
 	CommandValid bool
-	Command      *Op
+	Command      *rrpc.Op
 	CommandIndex int64
 
 	// For 3D:
@@ -113,22 +113,22 @@ type ApplyMsg struct {
 
 // A Go object implementing a single Raft peer.
 type Raftserver struct {
-	mu        sync.Mutex         // Lock to protect shared access to this peer's state
-	addr      string             // IP
-	peerAddrs []string           // other Node IP
-	peers     map[int]RaftClient // RPC end points of all peers
-	persister *Persister         // Object to hold this peer's persisted state
-	me        int32              // this peer's index into peers[]
-	dead      int32              // set by Kill()
-	UnimplementedRaftServer
+	mu        sync.Mutex              // Lock to protect shared access to this peer's state
+	addr      string                  // IP
+	peerAddrs []string                // other Node IP
+	peers     map[int]rrpc.RaftClient // RPC end points of all peers
+	persister *persister.Persister    // Object to hold this peer's persisted state
+	me        int32                   // this peer's index into peers[]
+	dead      int32                   // set by Kill()
+	rrpc.UnimplementedRaftServer
 	// Your data here (3A, 3B, 3C).
 	// Look at the paper's Figure 2 for a description of what
 
 	// state a Raft server must maintain.
 	applyCh     chan ApplyMsg
-	log         []*Entry // 日志
-	currentTerm int64    // 最新任期
-	votedFor    int32    // 收到的投票请求的候选者Id
+	log         []*rrpc.Entry // 日志
+	currentTerm int64         // 最新任期
+	votedFor    int32         // 收到的投票请求的候选者Id
 
 	commitIndex int64 // 已提交的最高Index
 	lastApplied int64 // 提交到状态机的最高Index
@@ -184,6 +184,7 @@ func (rf *Raftserver) CommitCheck() {
 				CommandIndex: tmpApplied,
 				SnapshotTerm: rf.log[rf.GlobalToLocal(tmpApplied)].Term,
 			}
+			message.CommandValid = message.CommandValid && message.Command != nil
 			buffer = append(buffer, message)
 			DPrintf("%v %v add Command %v(Idx: %v) to Buffer", roleName(rf.role), rf.me, message.Command, message.CommandIndex)
 		}
@@ -223,75 +224,112 @@ func (rf *Raftserver) CommitCheck() {
 func (rf *Raftserver) persist() {
 	// Your code here (3C).
 	// Example:
-	w := new(bytes.Buffer)
-	e := labgob.NewEncoder(w)
-	e.Encode(rf.votedFor)
-	e.Encode(rf.currentTerm)
-	e.Encode(rf.log)
+	// w := new(bytes.Buffer)
+	// e := labgob.NewEncoder(w)
+	// e.Encode(rf.votedFor)
+	// e.Encode(rf.currentTerm)
+	// e.Encode(rf.log)
 
-	e.Encode(rf.lastIncludedIndex)
-	e.Encode(rf.lastIncludedTerm)
-	raftstate := w.Bytes()
+	// e.Encode(rf.lastIncludedIndex)
+	// e.Encode(rf.lastIncludedTerm)
+	// raftstate := w.Bytes()
 	// DPrintf("%v %v persist()", roleName(rf.role), rf.me)
-	rf.persister.Save(raftstate, rf.snapShot)
+
+	state := &persister.State{VotedFor: rf.votedFor, CurrentTerm: rf.currentTerm}
+	// DPrintf("%v 当前logs: %v", rf.me, rf.log)
+	logs := make([]*rrpc.Entry, len(rf.log)-1)
+	for i := 1; i < len(rf.log); i++ {
+		cur := rf.log[i]
+		if cur.Command != nil {
+			logs[i-1] = &rrpc.Entry{
+				Term: cur.Term,
+				Command: &rrpc.Op{
+					Optype:  cur.Command.Optype,
+					IncrId:  cur.Command.IncrId,
+					ClerkId: cur.Command.ClerkId,
+					Key:     cur.Command.Key,
+					Value:   cur.Command.Value,
+				},
+			}
+		} else {
+			logs[i-1] = &rrpc.Entry{
+				Term:    cur.Term,
+				Command: &rrpc.Op{},
+			}
+		}
+
+	}
+	rf.persister.Save(rf.snapShot, state, logs, rf.lastIncludedIndex, rf.lastIncludedTerm, rf.commitIndex)
 }
 
 // restore previously persisted state.
-func (rf *Raftserver) readPersist(data []byte) {
-	if data == nil || len(data) < 1 { // bootstrap without any state?
+// func (rf *Raftserver) readPersist(data []byte) {
+// 	if data == nil || len(data) < 1 { // bootstrap without any state?
+// 		return
+// 	}
+// 	// Your code here (3C).
+// 	// Example:
+// 	r := bytes.NewBuffer(data)
+// 	d := labgob.NewDecoder(r)
+// 	var logData []*rrpc.Entry
+// 	var votedFor int32
+// 	var currentTerm int64
+// 	var lastIncludedIndex int64
+// 	var lastIncludedTerm int64
+// 	errVotedFor := d.Decode(&votedFor)
+// 	errCurrentTerm := d.Decode(&currentTerm)
+// 	errLog := d.Decode(&logData)
+// 	errLastIncludedIndex := d.Decode(&lastIncludedIndex)
+// 	errLastIncludedTerm := d.Decode(&lastIncludedTerm)
+// 	if errLog != nil || errVotedFor != nil || errCurrentTerm != nil || errLastIncludedIndex != nil || errLastIncludedTerm != nil {
+// 		if errLog != nil {
+// 			DPrintf("Server %v readPersist error: %v", rf.me, errLog)
+// 		}
+// 		if errVotedFor != nil {
+// 			DPrintf("Server %v readPersist error: %v", rf.me, errVotedFor)
+// 		}
+// 		if errCurrentTerm != nil {
+// 			DPrintf("Server %v readPersist error: %v", rf.me, errCurrentTerm)
+// 		}
+// 		if errLastIncludedIndex != nil {
+// 			DPrintf("Server %v readPersist error: %v", rf.me, errLastIncludedIndex)
+// 		}
+// 		if errLastIncludedTerm != nil {
+// 			DPrintf("Server %v readPersist error: %v", rf.me, errLastIncludedTerm)
+// 		}
+// 	} else {
+// 		// rf.mu.Lock()
+// 		DPrintf("%v %v readPersist()", roleName(rf.role), rf.me)
+// 		rf.log = logData
+// 		rf.currentTerm = currentTerm
+// 		rf.votedFor = votedFor
+// 		rf.lastIncludedIndex = lastIncludedIndex
+// 		rf.lastIncludedTerm = lastIncludedTerm
+
+// 		rf.commitIndex = lastIncludedIndex
+// 		rf.lastApplied = lastIncludedIndex
+// 		// rf.mu.Unlock()
+// 	}
+// }
+
+func (rf *Raftserver) readPersist(logs []*rrpc.Entry, voteFor int32, currentTerm int64) {
+	rf.votedFor = voteFor
+	rf.currentTerm = currentTerm
+	if len(logs) < 1 {
+		DPrintf("%v readLogs is empty", rf.me)
 		return
 	}
-	// Your code here (3C).
-	// Example:
-	r := bytes.NewBuffer(data)
-	d := labgob.NewDecoder(r)
-	var logData []*Entry
-	var votedFor int32
-	var currentTerm int64
-	var lastIncludedIndex int64
-	var lastIncludedTerm int64
-	errVotedFor := d.Decode(&votedFor)
-	errCurrentTerm := d.Decode(&currentTerm)
-	errLog := d.Decode(&logData)
-	errLastIncludedIndex := d.Decode(&lastIncludedIndex)
-	errLastIncludedTerm := d.Decode(&lastIncludedTerm)
-	if errLog != nil || errVotedFor != nil || errCurrentTerm != nil || errLastIncludedIndex != nil || errLastIncludedTerm != nil {
-		if errLog != nil {
-			DPrintf("Server %v readPersist error: %v", rf.me, errLog)
-		}
-		if errVotedFor != nil {
-			DPrintf("Server %v readPersist error: %v", rf.me, errVotedFor)
-		}
-		if errCurrentTerm != nil {
-			DPrintf("Server %v readPersist error: %v", rf.me, errCurrentTerm)
-		}
-		if errLastIncludedIndex != nil {
-			DPrintf("Server %v readPersist error: %v", rf.me, errLastIncludedIndex)
-		}
-		if errLastIncludedTerm != nil {
-			DPrintf("Server %v readPersist error: %v", rf.me, errLastIncludedTerm)
-		}
-	} else {
-		// rf.mu.Lock()
-		DPrintf("%v %v readPersist()", roleName(rf.role), rf.me)
-		rf.log = logData
-		rf.currentTerm = currentTerm
-		rf.votedFor = votedFor
-		rf.lastIncludedIndex = lastIncludedIndex
-		rf.lastIncludedTerm = lastIncludedTerm
-
-		rf.commitIndex = lastIncludedIndex
-		rf.lastApplied = lastIncludedIndex
-		// rf.mu.Unlock()
-	}
+	rf.log = logs
 }
 
-func (rf *Raftserver) readSnapshot(data []byte) {
+func (rf *Raftserver) readSnapshot(data []byte, lastIndex int64, lastTerm int64) {
 	if len(data) < 1 {
-		DPrintf("%v readSnapShot Fail", rf.me)
+		DPrintf("%v readSnapShot is empty", rf.me)
 		return
 	}
 	rf.snapShot = data
+	rf.lastIncludedIndex = lastIndex
+	rf.lastIncludedTerm = lastTerm
 	DPrintf("%v readSnapShot Success", rf.me)
 }
 
@@ -316,6 +354,7 @@ func (rf *Raftserver) Snapshot(index int64, snapshot []byte) {
 	// DPrintf("%v %v(ComitIdx: %v,LastIncludIdx: %v) Start Snapshot, Idx: %v,BeforeCut: %v", roleName(rf.role), rf.me, rf.commitIndex, rf.lastIncludedIndex, index, len(rf.log))
 	rf.log = rf.log[rf.GlobalToLocal(index):]
 	rf.lastIncludedIndex = index
+	DPrintf("%v lastIncludedIndex update to %v", rf.me, index)
 	if rf.lastApplied < index {
 		rf.lastApplied = index
 	}
@@ -325,10 +364,10 @@ func (rf *Raftserver) Snapshot(index int64, snapshot []byte) {
 }
 
 // example RequestVote RPC handler.
-func (rf *Raftserver) RequestVote(ctx context.Context, args *RequestVoteArgs) (*RequestVoteReply, error) {
+func (rf *Raftserver) RequestVote(ctx context.Context, args *rrpc.RequestVoteArgs) (*rrpc.RequestVoteReply, error) {
 	// Your code here (3A, 3B).
 	// DPrintf("%v(V: %v) << %v's requestVote", rf.me, rf.votedFor, args.CandidateId)
-	reply := &RequestVoteReply{}
+	reply := &rrpc.RequestVoteReply{}
 	rf.mu.Lock()
 	DPrintf("%v %v(T: %v, V: %v) <<< C %v(T: %v), Try Lock", roleName(rf.role), rf.me, rf.currentTerm, rf.votedFor, args.CandidateId, args.Term)
 	defer rf.mu.Unlock()
@@ -377,8 +416,8 @@ func (rf *Raftserver) RequestVote(ctx context.Context, args *RequestVoteArgs) (*
 	return reply, nil
 }
 
-func (rf *Raftserver) AppendEntries(ctx context.Context, args *AppendEntriesArgs) (*AppendEntriesReply, error) {
-	reply := &AppendEntriesReply{}
+func (rf *Raftserver) AppendEntries(ctx context.Context, args *rrpc.AppendEntriesArgs) (*rrpc.AppendEntriesReply, error) {
+	reply := &rrpc.AppendEntriesReply{}
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	if args.Term < rf.currentTerm {
@@ -475,7 +514,7 @@ func (rf *Raftserver) AppendEntries(ctx context.Context, args *AppendEntriesArgs
 	return reply, nil
 }
 
-func (rf *Raftserver) sendAppendEntries(server int, args *AppendEntriesArgs) (*AppendEntriesReply, bool) {
+func (rf *Raftserver) sendAppendEntries(server int, args *rrpc.AppendEntriesArgs) (*rrpc.AppendEntriesReply, bool) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -488,7 +527,7 @@ func (rf *Raftserver) sendAppendEntries(server int, args *AppendEntriesArgs) (*A
 
 }
 
-func (rf *Raftserver) sendAppendEntriesToServer(server int, args *AppendEntriesArgs) {
+func (rf *Raftserver) sendAppendEntriesToServer(server int, args *rrpc.AppendEntriesArgs) {
 	// DPrintf("L %v sendAppendEntriesToServer try get Lock %v", rf.me, server)
 	rf.mu.Lock()
 	if rf.role != Leader {
@@ -509,7 +548,7 @@ func (rf *Raftserver) sendAppendEntriesToServer(server int, args *AppendEntriesA
 	}
 
 	if reply.Success {
-		DPrintf("%v %v Update %v matchIdx %v > %v, nextIdx %v > %v", roleName(rf.role), rf.me, server, rf.matchIndex[server], max(rf.matchIndex[server], args.PrevLogIndex+int64(len(args.Entries))), rf.nextIndex[server], args.PrevLogIndex+int64(len(args.Entries)+1))
+		// DPrintf("%v %v Update %v matchIdx %v > %v, nextIdx %v > %v", roleName(rf.role), rf.me, server, rf.matchIndex[server], max(rf.matchIndex[server], args.PrevLogIndex+int64(len(args.Entries))), rf.nextIndex[server], args.PrevLogIndex+int64(len(args.Entries)+1))
 		rf.matchIndex[server] = max(rf.matchIndex[server], args.PrevLogIndex+int64(len(args.Entries)))
 		// rf.matchIndex[server] = args.PrevLogIndex + len(args.Entries)
 		rf.nextIndex[server] = rf.matchIndex[server] + 1
@@ -588,8 +627,8 @@ func (rf *Raftserver) sendAppendEntriesToServer(server int, args *AppendEntriesA
 	}
 }
 
-func (rf *Raftserver) InstallSnapshot(ctx context.Context, args *InstallSnapshotArgs) (*InstallSnapshotReply, error) {
-	reply := &InstallSnapshotReply{}
+func (rf *Raftserver) InstallSnapshot(ctx context.Context, args *rrpc.InstallSnapshotArgs) (*rrpc.InstallSnapshotReply, error) {
+	reply := &rrpc.InstallSnapshotReply{}
 	rf.mu.Lock()
 	DPrintf("Snapshot %v %v(LastIncludedIdx: %v) <<< L %v(LastIncludedIdx: %v)", roleName(rf.role), rf.me, rf.lastIncludedIndex, args.LeaderId, args.LastIncludedIndex)
 	defer func() {
@@ -633,8 +672,8 @@ func (rf *Raftserver) InstallSnapshot(ctx context.Context, args *InstallSnapshot
 		rf.log = rf.log[rIdx:]
 	} else {
 		// DPrintf("%v %v don't has Log in Snapshot, Clear Log", roleName(rf.role), rf.me)
-		rf.log = make([]*Entry, 1)
-		rf.log = append(rf.log, &Entry{Term: args.LastIncludedTerm, Command: args.LastIncludedCommand})
+		rf.log = make([]*rrpc.Entry, 1)
+		rf.log = append(rf.log, &rrpc.Entry{Term: args.LastIncludedTerm, Command: args.LastIncludedCommand})
 	}
 
 	rf.snapShot = args.Data
@@ -653,7 +692,7 @@ func (rf *Raftserver) InstallSnapshot(ctx context.Context, args *InstallSnapshot
 	return reply, nil
 }
 
-func (rf *Raftserver) sendInstallSnapshot(server int, args *InstallSnapshotArgs) (*InstallSnapshotReply, bool) {
+func (rf *Raftserver) sendInstallSnapshot(server int, args *rrpc.InstallSnapshotArgs) (*rrpc.InstallSnapshotReply, bool) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -672,7 +711,7 @@ func (rf *Raftserver) sendInstallSnapshotToServer(server int) {
 		rf.mu.Unlock()
 		return
 	}
-	args := InstallSnapshotArgs{
+	args := rrpc.InstallSnapshotArgs{
 		Term:                rf.currentTerm,
 		LeaderId:            rf.me,
 		LastIncludedIndex:   rf.lastIncludedIndex,
@@ -707,15 +746,15 @@ func (rf *Raftserver) sendInstallSnapshotToServer(server int) {
 	rf.nextIndex[server] = max(rf.LocalToGlobal(1), rf.nextIndex[server])
 }
 
-func (rf *Raftserver) sendBeatCh(server int, args *AppendEntriesArgs, ch chan bool) {
+func (rf *Raftserver) sendBeatCh(server int, args *rrpc.AppendEntriesArgs, ch chan bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	r, err := rf.peers[server].AppendEntries(ctx, args)
-	DPrintf("%v Send SingleHeartBeat to %v Get Reply:(Success: %v)", rf.me, server, r.Success)
 	if err != nil {
 		DPrintf("L %v Append to F %v Err: %v", rf.me, server, err)
 		ch <- false
 	} else {
+		DPrintf("%v Send SingleHeartBeat to %v Get Reply:(Success: %v)", rf.me, server, r.Success)
 		ch <- r.Success
 	}
 }
@@ -731,7 +770,7 @@ func (rf *Raftserver) SingleHeartBeat() bool {
 	// for i := 0; i < len(rf.peers); i++ {
 	for i := range rf.peers {
 		chs[i] = make(chan bool, 1)
-		args := &AppendEntriesArgs{
+		args := &rrpc.AppendEntriesArgs{
 			Term:         rf.currentTerm,
 			LeaderId:     rf.me,
 			PrevLogIndex: rf.nextIndex[i] - 1,
@@ -774,7 +813,7 @@ func (rf *Raftserver) StartSendAppendEntries() {
 			// 	continue
 			// }
 			// DPrintf("Prepare Send AppendEntries, nextIdx: %v, lastIncludedIndex: %v, global :%v", rf.nextIndex[i], rf.lastIncludedIndex, rf.GlobalToLocal(rf.nextIndex[i]-1))
-			args := &AppendEntriesArgs{
+			args := &rrpc.AppendEntriesArgs{
 				Term:         rf.currentTerm,
 				LeaderId:     rf.me,
 				PrevLogIndex: rf.nextIndex[i] - 1,
@@ -789,7 +828,7 @@ func (rf *Raftserver) StartSendAppendEntries() {
 				installSnapshot = true
 			} else if rf.LocalToGlobal(int64(len(rf.log)-1)) > args.PrevLogIndex {
 				// 测试是否应该在复制 log 时检查leader任期和最后一个日志的任期是否相同，
-				args.Entries = append([]*Entry{}, rf.log[rf.GlobalToLocal(rf.nextIndex[i]):]...)
+				args.Entries = append([]*rrpc.Entry{}, rf.log[rf.GlobalToLocal(rf.nextIndex[i]):]...)
 				// args.Entries = rf.log[rf.GlobalToLocal(rf.nextIndex[i]):]
 				DPrintf("AppendEntries: L %v(T: %v,I: %v) >>> F %v\n", rf.me, rf.currentTerm, rf.nextIndex[i], i)
 			} else {
@@ -843,7 +882,7 @@ func (rf *Raftserver) StartSendAppendEntries() {
 // capitalized all field names in structs passed over RPC, and
 // that the caller passes the address of the reply struct with &, not
 // the struct itself.
-func (rf *Raftserver) sendRequestVote(server int, args *RequestVoteArgs) (*RequestVoteReply, bool) {
+func (rf *Raftserver) sendRequestVote(server int, args *rrpc.RequestVoteArgs) (*rrpc.RequestVoteReply, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	r, err := rf.peers[server].RequestVote(ctx, args)
@@ -866,7 +905,7 @@ func (rf *Raftserver) sendRequestVote(server int, args *RequestVoteArgs) (*Reque
 // if it's ever committed. the second return value is the current
 // term. the third return value is true if this server believes it is
 // the leader.
-func (rf *Raftserver) Start(command *Op) (int64, int64, bool) {
+func (rf *Raftserver) Start(command *rrpc.Op) (int64, int64, bool) {
 	// DPrintf("Get %v(Leader: %v) in Start before Lock", rf.me, rf.role == Leader)
 	rf.mu.Lock()
 
@@ -881,7 +920,7 @@ func (rf *Raftserver) Start(command *Op) (int64, int64, bool) {
 		return -1, -1, false
 	}
 
-	newEntry := &Entry{
+	newEntry := &rrpc.Entry{
 		Term:    rf.currentTerm,
 		Command: command,
 	}
@@ -912,7 +951,7 @@ func (rf *Raftserver) killed() bool {
 	return z == 1
 }
 
-func (rf *Raftserver) procVoteAnswer(server int, args *RequestVoteArgs) bool {
+func (rf *Raftserver) procVoteAnswer(server int, args *rrpc.RequestVoteArgs) bool {
 	// sendArgs := &args
 	reply, ok := rf.sendRequestVote(server, args)
 	if !ok { // 调用失败，直接返回投票失败
@@ -940,7 +979,7 @@ func (rf *Raftserver) procVoteAnswer(server int, args *RequestVoteArgs) bool {
 	return reply.VoteGranted
 }
 
-func (rf *Raftserver) collectVote(server int, args *RequestVoteArgs) {
+func (rf *Raftserver) collectVote(server int, args *rrpc.RequestVoteArgs) {
 	ok := rf.procVoteAnswer(server, args)
 	if !ok {
 		// DPrintf("%v Votes Return False", rf.me)
@@ -994,7 +1033,7 @@ func (rf *Raftserver) StartElection() {
 	rf.heartbeatTimeStamp = time.Now() // 以免当前选举还未结束，自己又开启一轮选举
 	// rf.ResetHeartTimer(HeartbeatTimeThreshold()) // 以免当前选举还未结束，自己又开启一轮选举
 
-	args := &RequestVoteArgs{
+	args := &rrpc.RequestVoteArgs{
 		Term:         rf.currentTerm,
 		CandidateId:  rf.me,
 		LastLogIndex: rf.LocalToGlobal(int64(len(rf.log) - 1)),
@@ -1049,7 +1088,7 @@ func (rf *Raftserver) connectToPeers() error {
 			DPrintf("No server at %s", addr)
 			return fmt.Errorf("no server listening at %s", addr)
 		}
-		rf.peers[i] = NewRaftClient(conn)
+		rf.peers[i] = rrpc.NewRaftClient(conn)
 	}
 
 	for len(failed) > 0 {
@@ -1060,7 +1099,7 @@ func (rf *Raftserver) connectToPeers() error {
 			time.Sleep(500 * time.Millisecond)
 			continue
 		}
-		rf.peers[i] = NewRaftClient(conn)
+		rf.peers[i] = rrpc.NewRaftClient(conn)
 		failed = failed[:len(failed)-1]
 	}
 
@@ -1069,7 +1108,7 @@ func (rf *Raftserver) connectToPeers() error {
 
 func (rf *Raftserver) serve(lis net.Listener) {
 	s := grpc.NewServer()
-	RegisterRaftServer(s, rf)
+	rrpc.RegisterRaftServer(s, rf)
 	DPrintf("node %v listening at %v", rf.me, lis.Addr())
 	if err := s.Serve(lis); err != nil {
 		log.Fatalf("failed to serve: %v", err)
@@ -1100,17 +1139,17 @@ func (rf *Raftserver) startWork() {
 // Make() must return quickly, so it should start goroutines
 // for any long-running work.
 func Make(peerAddrs []string, me int32,
-	persister *Persister, applyCh chan ApplyMsg, addr string, lis net.Listener) *Raftserver {
+	persister *persister.Persister, applyCh chan ApplyMsg, addr string, lis net.Listener) *Raftserver {
 	rf := &Raftserver{
 		addr:      addr,
 		peerAddrs: peerAddrs,
-		peers:     make(map[int]RaftClient),
+		peers:     make(map[int]rrpc.RaftClient),
 		me:        me,
 		persister: persister,
 		applyCh:   applyCh,
 		dead:      0,
 
-		log:         make([]*Entry, 0),
+		// log:         make([]*rrpc.Entry, 0),
 		currentTerm: 0,
 		votedFor:    -1,
 		nextIndex:   make([]int64, len(peerAddrs)),
@@ -1124,7 +1163,7 @@ func Make(peerAddrs []string, me int32,
 		voteCount:         0,
 	}
 	rf.condApply = sync.NewCond(&rf.mu)
-	rf.log = append(rf.log, &Entry{Term: 0})
+	// rf.log = append(rf.log, &rrpc.Entry{Term: 0})
 
 	// Your initialization code here (3A, 3B, 3C).
 

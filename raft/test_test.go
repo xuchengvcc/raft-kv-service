@@ -3,6 +3,8 @@ package raft
 import (
 	"fmt"
 	"net"
+	"raft-kv-service/persister"
+	rrpc "raft-kv-service/rpc"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,7 +20,7 @@ func setupTestCase(t *testing.T) ([]*Raftserver, []chan ApplyMsg) {
 
 	for i := 0; i < len(nodeAddrs); i++ {
 
-		persister := MakePersister()
+		persister := persister.MakePersister(i)
 		applyCh := make(chan ApplyMsg, 1)
 		channels = append(channels, applyCh)
 		ip_port := strings.Split(nodeAddrs[i], ":")
@@ -68,7 +70,7 @@ func TestConnect(t *testing.T) {
 		for ; leader < len(servers); leader++ {
 			if _, is := servers[leader].GetState(); is {
 				fmt.Printf("t:%v try Start\n", leader)
-				_, _, isLeader := servers[leader].Start(&Op{Key: strconv.Itoa(i), Value: strconv.Itoa(i + 10000)})
+				_, _, isLeader := servers[leader].Start(&rrpc.Op{Key: strconv.Itoa(i), Value: strconv.Itoa(i + 10000)})
 				if isLeader {
 					i++
 					break

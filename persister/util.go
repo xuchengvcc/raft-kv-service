@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"syscall"
 
 	"go.uber.org/zap"
@@ -21,8 +20,8 @@ const (
 )
 
 var (
-	ErrLocked     = errors.New("fileutil: file already locked")
-	errBadWALName = errors.New("bad wal name")
+	ErrLocked = errors.New("fileutil: file already locked")
+	// errBadWALName = errors.New("bad wal name")
 	linuxLockFile = flockLockFile
 )
 
@@ -69,17 +68,17 @@ func Fdatasync(f *os.File) error {
 	return syscall.Fdatasync(int(f.Fd()))
 }
 
-func walName(seq, index uint64) string {
-	return fmt.Sprintf("%016x-%016x.wal", seq, index)
-}
+// func walName(seq, index uint64) string {
+// 	return fmt.Sprintf("%016x-%016x.wal", seq, index)
+// }
 
-func parseWALName(str string) (seq, index uint64, err error) {
-	if !strings.HasSuffix(str, ".wal") {
-		return 0, 0, errBadWALName
-	}
-	_, err = fmt.Sscanf(str, "%016x-%016x.wal", &seq, &index)
-	return seq, index, err
-}
+// func parseWALName(str string) (seq, index uint64, err error) {
+// 	if !strings.HasSuffix(str, ".wal") {
+// 		return 0, 0, errBadWALName
+// 	}
+// 	_, err = fmt.Sscanf(str, "%016x-%016x.wal", &seq, &index)
+// 	return seq, index, err
+// }
 
 func LockFile(path string, flag int, perm os.FileMode) (*LockedFile, error) {
 	return linuxLockFile(path, flag, perm)

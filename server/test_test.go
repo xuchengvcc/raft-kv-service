@@ -5,7 +5,7 @@ import (
 	"math/rand"
 	"net"
 	"os"
-	"raft-kv-service/raft"
+	"raft-kv-service/persister"
 	"runtime/pprof"
 	"strconv"
 	"strings"
@@ -21,7 +21,7 @@ func setupTestCase(t *testing.T) ([]*KVServer, []string) {
 
 	for i := 0; i < len(nodeAddrs); i++ {
 
-		persister := raft.MakePersister()
+		persister := persister.MakePersister(i)
 		ip_port := strings.Split(nodeAddrs[i], ":")
 		lis, err := net.Listen("tcp", fmt.Sprintf(":%v", ip_port[1]))
 		if err != nil {
@@ -32,7 +32,7 @@ func setupTestCase(t *testing.T) ([]*KVServer, []string) {
 		if serr != nil {
 			t.Fatalf("server listen Failed at %v, Err:%v", ip_port[1], err)
 		}
-		server := StartKVServer(nodeAddrs, int32(i), persister, nodeAddrs[i], lis, slis, 10000)
+		server := StartKVServer(nodeAddrs, int32(i), persister, nodeAddrs[i], lis, slis, 2000)
 
 		servers = append(servers, server)
 	}
@@ -57,6 +57,7 @@ func TestBasic(t *testing.T) {
 	result := make(map[string]string, 1000)
 	n := 10000
 	errorCount := 0
+	errorKey := make([]string, 0)
 	failedCount := 0
 	failedLoop := make([]int, 0)
 	for i := 0; i < 1000; i++ {
@@ -71,7 +72,7 @@ func TestBasic(t *testing.T) {
 	for i := 0; i < n; i++ {
 		randnum := rand.Float64()
 		key := strconv.Itoa(i % 1000)
-		value := strconv.Itoa(rand.Int())
+		value := strconv.Itoa(int(rand.Int31() / 100000))
 		fmt.Printf("Testing Loop: %v\n", i)
 		if randnum < 0.33 {
 			err := client.Put(key, value)
@@ -88,6 +89,7 @@ func TestBasic(t *testing.T) {
 				if !strings.EqualFold(getValue, result[key]) {
 					fmt.Printf("Get Value Err: K:%v want:(V:%v) but Get(V:%v)\n", key, result[key], getValue)
 					errorCount++
+					errorKey = append(errorKey, key)
 				}
 			} else {
 				failedCount++
@@ -111,6 +113,7 @@ func TestBasic(t *testing.T) {
 			if !strings.EqualFold(get, want) {
 				fmt.Printf("Get Value Err: K:%v want:(V:%v) but Get(V:%v)\n", key, want, get)
 				errorCount++
+				errorKey = append(errorKey, key)
 			}
 		} else {
 			failedCount++
@@ -121,7 +124,8 @@ func TestBasic(t *testing.T) {
 	fmt.Printf("Operation Failed: %v\n", failedCount)
 	fmt.Printf("Operation Failed Loop: %v\n", failedLoop)
 	if errorCount > 0 {
-		fmt.Printf("Error Get: %v Times", errorCount)
+		fmt.Printf("Error Get: %v Times\n", errorCount)
+		fmt.Printf("Error Get Keys: %v\n", errorKey)
 		t.Fatalf("Test Failed")
 	}
 }

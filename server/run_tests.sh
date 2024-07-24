@@ -16,7 +16,7 @@ while [[ "$#" -gt 0 ]]; do
         -w|--workers) WORKERS="$2"; shift ;;
         -i|--iterations) ITERATIONS="$2"; shift ;;
         -o|--output) OUTPUT_DIR="$2"; shift ;;
-        -r|--race) RACE=true ;;
+        -r|--race) RACE=false ;;
         -t|--timing) TIMING=true ;;
         -v|--verbose) VERBOSE=$((VERBOSE + 1)) ;;
         -cp|--cpuProfile) CPU_PROFILE="$2"; shift ;;

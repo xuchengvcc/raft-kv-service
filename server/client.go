@@ -12,7 +12,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-const maxRetryTime = 50
+const maxRetryTime = 100
 
 var id int32 = 100
 var mu sync.Mutex
