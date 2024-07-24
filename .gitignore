@@ -6,3 +6,4 @@
 /server/stat*
 /server/test_logs/*
 /server/CPU*.out
+/server/server.test

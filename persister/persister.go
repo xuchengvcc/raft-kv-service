@@ -137,6 +137,8 @@ func (ps *Persister) loadState() {
 		err = proto.Unmarshal(b, ps.state)
 		if err != nil {
 			log.Print("failed to unmarshal state, err: ", err)
+		} else {
+			log.Printf("%v load state first: %v, last: %v", ps.id, ps.state.FirstIndex, ps.state.LastIndex)
 		}
 	}
 
@@ -270,7 +272,7 @@ func (ps *Persister) saveLogToDisk() {
 			log.Printf("%v write log to disk failed: %v", ps.id, err)
 		}
 		ps.state.LastIndex = int64(ps.log.GetLastIndex())
-
+		ps.saveState()
 		ps.mu.Unlock()
 	}
 }
@@ -291,6 +293,7 @@ func (ps *Persister) saveSnapToDisk() {
 		log.Printf("log in disk firstIdx: %v, lastIdx: %v", ps.log.GetFirstIndex(), ps.log.GetFirstIndex())
 		ps.checkSum = ps.checkSum[ps.snapshot.LastIndex-ps.state.FirstIndex+1:]
 		ps.state.FirstIndex = ps.snapshot.LastIndex + 1
+		ps.saveState()
 	} else {
 		log.Printf("will not save snapshot lastIdx: %v", ps.snapshot.LastIndex)
 	}

@@ -238,6 +238,7 @@ func (rf *Raftserver) persist() {
 	state := &persister.State{VotedFor: rf.votedFor, CurrentTerm: rf.currentTerm}
 	// DPrintf("%v 当前logs: %v", rf.me, rf.log)
 	logs := make([]*rrpc.Entry, len(rf.log)-1)
+	// DPrintf("rf.logs: %v", rf.log)
 	for i := 1; i < len(rf.log); i++ {
 		cur := rf.log[i]
 		if cur.Command != nil {
