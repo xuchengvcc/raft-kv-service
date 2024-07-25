@@ -28,7 +28,8 @@ func setupTestCase(t *testing.T) ([]*Raftserver, []chan ApplyMsg) {
 		if err != nil {
 			t.Fatalf("listen Failed at %v, Err:%v", ip_port[1], err)
 		}
-		server := Make(nodeAddrs, int32(i), persister, applyCh, nodeAddrs[i], lis)
+		ch := make(chan struct{}, 1)
+		server := Make(nodeAddrs, int32(i), persister, applyCh, nodeAddrs[i], lis, ch)
 
 		servers = append(servers, server)
 	}
