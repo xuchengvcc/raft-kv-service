@@ -62,8 +62,8 @@ func MakePersister(id int) *Persister {
 		snapshotter: *NewSnapshotter(nil, "./snap"),
 		state:       &IndexState{RaftSate: state, LastIndex: -1},
 		log:         log,
-		entryCh:     make(chan *logEntry, 100),
-		SnapTimer:   time.NewTimer(PersistTime),
+		// entryCh:     make(chan *logEntry, 100),
+		SnapTimer: time.NewTimer(PersistTime),
 	}
 	// persister.initFromDisk()
 	persister.initFromDisk()
@@ -90,6 +90,7 @@ func (ps *Persister) initFromDisk() {
 	ps.loadState()
 	// ps.checkSum = make([]crcentry, ps.state.LastIndex-ps.state.FirstIndex+1)
 	ps.checkSum = make([]uint32, max(16, ps.state.LastIndex-ps.state.FirstIndex+1))
+	ps.entryCh = make(chan *logEntry, max(100, ps.state.LastIndex-ps.state.FirstIndex+1))
 	if ps.state.LastIndex == -1 {
 		b, err := proto.Marshal(&rrpc.Entry{Term: 0})
 		if err != nil {
@@ -158,15 +159,15 @@ func (ps *Persister) Copy() *Persister {
 	return np
 }
 
-func (ps *Persister) ReadRaftState() ([]*rrpc.Entry, int32, int64) {
+func (ps *Persister) ReadRaftState() ([]*rrpc.Entry, int32, int64, int64) {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
 	start := ps.state.FirstIndex
 	end := ps.state.LastIndex
-	entries := make([]*rrpc.Entry, end-start+1)
-	if ps.state.LastIndex == 0 {
-		entries = append(entries, &rrpc.Entry{Term: 0})
-	}
+	entries := make([]*rrpc.Entry, 0, end-start+1)
+	// if ps.state.LastIndex == 0 {
+	entries = append(entries, &rrpc.Entry{Term: max(ps.state.FirstIndex-1, 0)})
+	// }
 	for ; end > 0 && start <= end; start++ {
 		b, err := ps.log.Read(uint64(start))
 		if err != nil {
@@ -179,6 +180,7 @@ func (ps *Persister) ReadRaftState() ([]*rrpc.Entry, int32, int64) {
 		}
 		entries = append(entries, entry)
 	}
+
 	if entries == nil {
 		log.Print("entries is nil")
 	}
@@ -188,7 +190,23 @@ func (ps *Persister) ReadRaftState() ([]*rrpc.Entry, int32, int64) {
 	if ps.state.RaftSate == nil {
 		log.Print("ps.state.RaftSate is nil")
 	}
-	return entries, ps.state.RaftSate.VotedFor, ps.state.RaftSate.CurrentTerm
+
+	// b, err := ps.log.Read(ps.log.GetFirstIndex())
+	// if err != nil {
+	// 	log.Fatal("failed to read log, err: ", err)
+	// }
+	// firstEntry := &rrpc.Entry{}
+	// err = proto.Unmarshal(b, firstEntry)
+	// if err != nil {
+	// 	log.Fatal("failed to unmarshal log, err: ", err)
+	// }
+	// log.Printf("Log first saved entry: %v", firstEntry)
+
+	log.Printf("%v persister saved state FirstIdx: %v,LastIdx: %v, commitIndex: %v", ps.id, ps.state.FirstIndex, ps.state.LastIndex, ps.state.LastCommitIndex)
+	log.Printf("%v val saved state FirstIdx: %v,LastIdx: %v", ps.id, ps.log.GetFirstIndex(), ps.log.GetLastIndex())
+	// log.Printf("Load logs: %v", entries)
+	// log.Fatal("Stop")
+	return entries, ps.state.RaftSate.VotedFor, ps.state.RaftSate.CurrentTerm, ps.state.LastCommitIndex
 }
 
 func (ps *Persister) RaftStateSize() int {
@@ -203,6 +221,7 @@ func (ps *Persister) Save(snapshot []byte, state *State, logs []*rrpc.Entry, las
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
 	ps.state.RaftSate = state
+	ps.state.LastCommitIndex = commitIndex
 	ps.saveState()
 	// ps.snapshot = &Snapshot{RowData: clone(snapshot), LastIndex: lastIncludeIndex, LastTerm: lastTerm}
 	ps.snapshot.RowData = clone(snapshot)
@@ -219,10 +238,10 @@ func (ps *Persister) Save(snapshot []byte, state *State, logs []*rrpc.Entry, las
 	// 	}
 	// }
 	// go ps.saveLog(lastIncludeIndex, commitIndex, logs)
-	ps.filter(lastIncludeIndex, commitIndex, logs)
+	ps.filter(lastIncludeIndex, logs)
 }
 
-func (ps *Persister) filter(lastIndex int64, commitIndex int64, logs []*rrpc.Entry) {
+func (ps *Persister) filter(lastIndex int64, logs []*rrpc.Entry) {
 	log.Printf("persister lastIdx: %v, log lastIdx: %v", ps.state.LastIndex, lastIndex)
 	if lastIndex >= ps.state.LastIndex {
 		for i, entry := range logs {
@@ -230,24 +249,22 @@ func (ps *Persister) filter(lastIndex int64, commitIndex int64, logs []*rrpc.Ent
 			if err != nil {
 				log.Fatal("Marshal log error: ", err)
 			}
-			log.Printf("(1) add log channel idx: %v", lastIndex+int64(i+1))
+			log.Printf("%v (1) add log channel idx: %v", ps.id, lastIndex+int64(i+1))
 			ps.entryCh <- &logEntry{Index: lastIndex + int64(i+1), Entry: b}
 		}
 		// if lastIndex > ps.state.LastIndex {
 		// 	// TODO: 将快照持久化，并截断日志
 		// }
-		ps.state.LastCommitIndex = commitIndex
 		return
 	}
 	i := max(0, ps.state.LastCommitIndex-lastIndex)
-	ps.state.LastCommitIndex = commitIndex
 	for ; i < int64(len(logs)); i++ {
 		b, err := proto.Marshal(logs[i])
 		if err != nil {
 			log.Fatal("Marshal log error: ", err)
 		}
-		if i+lastIndex+1 > ps.state.LastIndex || crc32.ChecksumIEEE(b) == ps.checkSum[i+lastIndex+1-ps.state.FirstIndex] {
-			log.Printf("(2) add log channel idx: %v", i+lastIndex+1)
+		if i+lastIndex+1 > ps.state.LastIndex || crc32.ChecksumIEEE(b) != ps.checkSum[i+lastIndex+1-ps.state.FirstIndex] {
+			log.Printf("%v (2) add log channel idx: %v", ps.id, i+lastIndex+1)
 			ps.entryCh <- &logEntry{Index: i + lastIndex + 1, Entry: b}
 		}
 	}
@@ -262,7 +279,10 @@ func (ps *Persister) saveLogToDisk() {
 			// TODO: 将快照持久化，并截断日志
 			ps.saveSnapToDisk()
 		} else if _log.Index < ps.state.LastIndex {
-			ps.log.TruncateBack(uint64(_log.Index))
+			err := ps.log.TruncateBack(uint64(_log.Index - 1))
+			if err != nil {
+				log.Fatalf("%v truncateback failed idx %v err: %v", ps.id, _log.Index-1, err)
+			}
 			ps.checkSum = ps.checkSum[:_log.Index-ps.state.FirstIndex]
 		}
 
@@ -286,8 +306,13 @@ func (ps *Persister) saveSnapToDisk() {
 			log.Print("snapshot save to disk successfully")
 			ps.snapshotter.LastIdx = ps.snapshot.LastIndex
 		}
-		err = ps.log.TruncateFront(uint64(ps.snapshot.LastIndex))
+		lastWalIndex := ps.log.GetLastIndex()
+
+		// 此处暂时会多留一个 log，但不影响
+		err = ps.log.TruncateFront(min(uint64(ps.snapshot.LastIndex), lastWalIndex))
+		// err = ps.log.TruncateFront(uint64(ps.snapshot.LastIndex + 1))
 		if err != nil {
+			log.Printf("log firstIdx: %v,lastIdx: %v, need truncate: %v", ps.log.GetFirstIndex(), lastWalIndex, min(uint64(ps.snapshot.LastIndex), lastWalIndex))
 			log.Fatal("truncate front log err: ", err)
 		}
 		log.Printf("log in disk firstIdx: %v, lastIdx: %v", ps.log.GetFirstIndex(), ps.log.GetFirstIndex())
@@ -309,64 +334,6 @@ func (ps *Persister) saveSnapClock() {
 	}
 
 }
-
-// func (ps *Persister) saveLog(lastIndex int64, commitIndex int64, logs []*rrpc.Entry) {
-// 	if len(logs) < 2 {
-// 		return
-// 	}
-
-// 	lastIdx := ps.log.GetLastIndex()
-// 	log.Printf("lastincludeindex + len(logs) = %v, lastIdx: %v", lastIndex+int64(len(logs)), lastIdx)
-// 	if lastIndex+int64(len(logs)) == int64(lastIdx) {
-// 		return
-// 	}
-// 	ps.mu.Lock()
-// 	defer ps.mu.Unlock()
-// 	i := ps.state.LastCommitIndex - lastIndex + 1
-// 	log.Printf("i := %v", i)
-
-// 	for ; i < int64(len(logs)); i++ {
-// 		b, err := proto.Marshal(logs[i])
-// 		if err != nil {
-// 			log.Fatal("Marshal log error: ", err)
-// 		}
-// 		crc := crc32.ChecksumIEEE(b)
-// 		if i+lastIndex >= ps.state.LastIndex || crc != ps.checkSum[i+lastIndex-ps.state.FirstIndex] {
-// 			// find first different log
-// 			break
-// 			// ps.log.Write(uint64(lastIndex+i), b)
-// 		}
-// 	}
-
-// 	// conflict with previous saved logs
-// 	if i+lastIndex < ps.state.LastIndex {
-// 		log.Printf("will truncateback: %v", i+lastIndex)
-// 		ps.log.TruncateBack(uint64(i + lastIndex))
-// 	}
-// 	truncate := i + lastIndex - ps.state.FirstIndex
-// 	if truncate < int64(len(ps.checkSum)) {
-// 		ps.checkSum = ps.checkSum[:truncate]
-// 	}
-// 	for ; i < int64(len(logs)); i++ {
-
-// 		b, err := proto.Marshal(logs[i])
-// 		if err != nil {
-// 			log.Fatal("Marshal log error: ", err)
-// 		}
-// 		log.Printf("%v will save log %v: %v", uint64(lastIndex+i), ps.id, logs[i])
-// 		crc := crc32.ChecksumIEEE(b)
-// 		ps.checkSum = append(ps.checkSum, crc)
-// 		// save log
-// 		err = ps.log.Write(uint64(lastIndex+i), b)
-// 		if err != nil {
-// 			log.Printf("write idx: %v log %v failed: %v", uint64(lastIndex+i), logs[i], err)
-// 		}
-// 	}
-// 	ps.state.LastCommitIndex = commitIndex
-// 	ps.state.LastIndex = max(ps.state.LastIndex, ps.state.FirstIndex+int64(len(ps.checkSum))-1)
-// 	logs = nil
-// 	ps.saveState()
-// }
 
 func (ps *Persister) ReadSnapshot() ([]byte, int64, int64) {
 	ps.mu.Lock()

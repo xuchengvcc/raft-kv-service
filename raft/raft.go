@@ -149,6 +149,9 @@ type Raftserver struct {
 	snapShot          []byte // 快照
 	lastIncludedIndex int64  // 日志中的最高索引
 	lastIncludedTerm  int64  // 日志中的最高Term
+
+	// prepare
+	raftprepare chan struct{}
 }
 
 // return currentTerm and whether this server
@@ -163,6 +166,22 @@ func (rf *Raftserver) GetState() (int64, bool) {
 	// return term, isleader
 	commitIdx := rf.commitIndex
 	return commitIdx, isleader
+}
+
+func (rf *Raftserver) QuickApply() {
+	DPrintf("%v Start quickapply, lastApply: %v, commitIdx: %v", rf.me, rf.lastApplied, rf.commitIndex)
+	for rf.lastApplied < rf.commitIndex {
+		rf.lastApplied++
+		message := ApplyMsg{
+			CommandValid: rf.lastIncludedIndex < rf.lastApplied,
+			Command:      rf.log[rf.GlobalToLocal(rf.lastApplied)].Command,
+			CommandIndex: rf.lastApplied,
+			SnapshotTerm: rf.log[rf.GlobalToLocal(rf.lastApplied)].Term,
+		}
+		message.CommandValid = message.CommandValid && message.Command != nil
+		rf.applyCh <- message
+	}
+	rf.raftprepare <- struct{}{}
 }
 
 func (rf *Raftserver) CommitCheck() {
@@ -313,9 +332,11 @@ func (rf *Raftserver) persist() {
 // 	}
 // }
 
-func (rf *Raftserver) readPersist(logs []*rrpc.Entry, voteFor int32, currentTerm int64) {
+func (rf *Raftserver) readPersist(logs []*rrpc.Entry, voteFor int32, currentTerm int64, commitIndex int64) {
+	DPrintf("%v CommitIndex: %v", rf.me, commitIndex)
 	rf.votedFor = voteFor
 	rf.currentTerm = currentTerm
+	rf.commitIndex = commitIndex
 	if len(logs) < 1 {
 		DPrintf("%v readLogs is empty", rf.me)
 		return
@@ -331,6 +352,20 @@ func (rf *Raftserver) readSnapshot(data []byte, lastIndex int64, lastTerm int64)
 	rf.snapShot = data
 	rf.lastIncludedIndex = lastIndex
 	rf.lastIncludedTerm = lastTerm
+	for i := range rf.nextIndex {
+		if i == int(rf.me) {
+			continue
+		}
+		rf.nextIndex[i] = lastIndex + 1
+	}
+	for i := range rf.matchIndex {
+		if i == int(rf.me) {
+			continue
+		}
+		rf.matchIndex[i] = lastIndex
+	}
+	// rf.commitIndex = lastIndex
+	rf.lastApplied = lastIndex
 	DPrintf("%v readSnapShot Success", rf.me)
 }
 
@@ -1125,7 +1160,9 @@ func (rf *Raftserver) startWork() {
 		rf.nextIndex[i] = rf.LocalToGlobal(int64(len(rf.log)))
 	}
 	// start ticker goroutine to start elections
+	// TODO: 开启服务之前，先将加载的日志应用完成
 	DPrintf("Node %v Has %v peers: %v", rf.me, len(rf.peers), rf.peers)
+	rf.QuickApply()
 	go rf.ticker()
 	go rf.CommitCheck()
 }
@@ -1140,7 +1177,7 @@ func (rf *Raftserver) startWork() {
 // Make() must return quickly, so it should start goroutines
 // for any long-running work.
 func Make(peerAddrs []string, me int32,
-	persister *persister.Persister, applyCh chan ApplyMsg, addr string, lis net.Listener) *Raftserver {
+	persister *persister.Persister, applyCh chan ApplyMsg, addr string, lis net.Listener, prepareCh chan struct{}) *Raftserver {
 	rf := &Raftserver{
 		addr:      addr,
 		peerAddrs: peerAddrs,
@@ -1162,6 +1199,7 @@ func Make(peerAddrs []string, me int32,
 		HeartbeatTimer:    time.NewTimer(0),
 		electionTimeStamp: time.Now(),
 		voteCount:         0,
+		raftprepare:       prepareCh,
 	}
 	rf.condApply = sync.NewCond(&rf.mu)
 	// rf.log = append(rf.log, &rrpc.Entry{Term: 0})

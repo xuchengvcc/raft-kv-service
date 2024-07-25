@@ -6,11 +6,15 @@ import (
 	"net"
 	"os"
 	"raft-kv-service/persister"
+	rrpc "raft-kv-service/rpc"
+	"raft-kv-service/wal"
 	"runtime/pprof"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"google.golang.org/protobuf/proto"
 )
 
 func setupTestCase(t *testing.T) ([]*KVServer, []string) {
@@ -32,12 +36,15 @@ func setupTestCase(t *testing.T) ([]*KVServer, []string) {
 		if serr != nil {
 			t.Fatalf("server listen Failed at %v, Err:%v", ip_port[1], err)
 		}
-		server := StartKVServer(nodeAddrs, int32(i), persister, nodeAddrs[i], lis, slis, 2000)
+		server := StartKVServer(nodeAddrs, int32(i), persister, nodeAddrs[i], lis, slis, 1000)
 
 		servers = append(servers, server)
 	}
 
-	time.Sleep(3 * time.Second)
+	// time.Sleep(3 * time.Second)
+	for i := 0; i < len(nodeAddrs); i++ {
+		<-servers[i].serverprepare
+	}
 
 	return servers, serverAddrs
 
@@ -128,4 +135,44 @@ func TestBasic(t *testing.T) {
 		fmt.Printf("Error Get Keys: %v\n", errorKey)
 		t.Fatalf("Test Failed")
 	}
+}
+
+func TestWal(t *testing.T) {
+	logs, err := wal.Open("./log/"+strconv.Itoa(0), wal.DefaultOptions)
+	if err != nil {
+		panic("wal open failed")
+	}
+	entries := make([]*rrpc.Op, 0, 100)
+	for i := 0; i < 100; i++ {
+		entries = append(entries, &rrpc.Op{Key: strconv.Itoa(i), Value: strconv.Itoa(i)})
+	}
+	for i := range entries {
+		fmt.Println("marshal ", i)
+		b, err := proto.Marshal(entries[i])
+		if err != nil {
+			fmt.Print("err: ", err)
+		}
+		logs.Write(uint64(i+1), b)
+	}
+
+	fmt.Printf("firstIdx: %v, lastIdx: %v\n", logs.GetFirstIndex(), logs.GetLastIndex())
+
+	tb := 99
+	logs.TruncateBack(uint64(tb))
+	fmt.Printf("TruncateBack: %v, now firstIdx: %v, lastIdx: %v\n", tb, logs.GetFirstIndex(), logs.GetLastIndex())
+
+	// tf := 99
+	// logs.TruncateFront(uint64(tf))
+	// fmt.Printf("TruncateFront: %v, now firstIdx: %v, lastIdx: %v\n", tf, logs.GetFirstIndex(), logs.GetLastIndex())
+
+	b, err := logs.Read(uint64(0))
+	if err != nil {
+		fmt.Println("Read failed: ", err)
+	}
+	entry := &rrpc.Op{}
+	err = proto.Unmarshal(b, entry)
+	if err != nil {
+		fmt.Println("unmarshal failed")
+	}
+	fmt.Println(0, " get ", entry)
 }

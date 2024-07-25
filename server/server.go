@@ -72,6 +72,10 @@ type KVServer struct {
 	persister    *persister.Persister
 	// Your definitions here.
 	readIdxQue []*readIdxOp
+
+	// prepare
+	raftprepare   chan struct{}
+	serverprepare chan struct{}
 }
 
 func (kv *KVServer) Get(ctx context.Context, args *GetArgs) (*GetReply, error) {
@@ -226,9 +230,11 @@ func (kv *KVServer) HandleOp(opArgs *rrpc.Op) result {
 }
 
 func (kv *KVServer) ApplyHandler() {
+	raft.DPrintf("%v Start ApplyHandler", kv.me)
 	for !kv.killed() {
 		// 循环将从节点提交的条目应用到状态机
 		_log := <-kv.applyCh
+		raft.DPrintf("%v get log: %v", kv.me, _log.Command)
 		if _log.CommandValid {
 			// op, ok := _log.Command.(raft.Op)
 			// if !ok {
@@ -425,6 +431,15 @@ func (kv *KVServer) serve(lis net.Listener) {
 	}
 }
 
+func (kv *KVServer) isPrepare() {
+	defer func() {
+		close(kv.raftprepare)
+		close(kv.serverprepare)
+	}()
+	struc := <-kv.raftprepare
+	kv.serverprepare <- struc
+}
+
 // servers[] contains the ports of the set of
 // servers that will cooperate via Raft to
 // form the fault-tolerant key/value service.
@@ -451,8 +466,10 @@ func StartKVServer(peerAddrs []string, me int32, persister *persister.Persister,
 	// You may need initialization code here.
 
 	kv.cp = pool.NewChannelPool[result](5)
-	kv.applyCh = make(chan raft.ApplyMsg)
-	kv.rf = raft.Make(peerAddrs, me, persister, kv.applyCh, addr, lis)
+	kv.applyCh = make(chan raft.ApplyMsg, 1)
+	kv.raftprepare = make(chan struct{}, 1)
+	kv.serverprepare = make(chan struct{}, 1)
+	kv.rf = raft.Make(peerAddrs, me, persister, kv.applyCh, addr, lis, kv.raftprepare)
 
 	// You may need initialization code here.
 	kv.dead = 0
@@ -460,12 +477,15 @@ func StartKVServer(peerAddrs []string, me int32, persister *persister.Persister,
 	kv.waitCh = map[int64]*chan result{}
 	kv.db = map[string]string{}
 	kv.mu.Lock()
-	snap, _, _ := persister.ReadSnapshot()
+	snap, lastIndex, _ := persister.ReadSnapshot()
+	kv.lastApplied = lastIndex
 	kv.LoadSnapshot(snap)
 	kv.mu.Unlock()
 	go kv.serve(slis)
 	// go persister.SaveSchedule()
 	go kv.ApplyHandler()
+
+	go kv.isPrepare()
 
 	return kv
 }
