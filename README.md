@@ -1,6 +1,6 @@
 # raft-kv-service
 
-# test command
+# test single client
 ```
 cd server
 ./run_tests.sh -cp CPU.out -f TestBasic
