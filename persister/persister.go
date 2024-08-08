@@ -275,7 +275,7 @@ func (ps *Persister) saveLogToDisk() {
 		_log := <-ps.entryCh
 		ps.mu.Lock()
 
-		if _log.Index > ps.state.LastIndex+1 {
+		if ps.snapshot.LastIndex > ps.state.LastIndex {
 			// TODO: 将快照持久化，并截断日志
 			ps.saveSnapToDisk()
 		} else if _log.Index < ps.state.LastIndex {
