@@ -6,7 +6,7 @@ cd server
 ./run_tests.sh -cp CPU.out -f TestBasic
 ```
 
-# CPU usage
+# CPU Utilization
 ```
 go tool pprof CPU.out
 ```
