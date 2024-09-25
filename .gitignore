@@ -5,5 +5,8 @@
 /server/snap*
 /server/stat*
 /server/test_logs/*
+/server/server.test
 /server/CPU*.out
 /server/server.test
+/proxy/snet
+/proxy/utils

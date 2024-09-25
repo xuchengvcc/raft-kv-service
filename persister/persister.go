@@ -14,6 +14,7 @@ import (
 	"log"
 	"os"
 	"path"
+	"raft-kv-service/mylog"
 	rrpc "raft-kv-service/rpc"
 	"raft-kv-service/wal"
 	"strconv"
@@ -26,7 +27,7 @@ import (
 const DBNAME string = "my.db"
 const SNAPNAME string = "snap"
 const STATNAME string = "./stat"
-const STATSUFFIX string = ".state"
+const STATSUFFIX string = "state"
 
 const PersistTime = 10 * time.Second
 
@@ -81,7 +82,7 @@ func (ps *Persister) initFromDisk() {
 	ps.snapshot, err = ps.snapshotter.Load()
 	if err != nil {
 		// log.Fatal("init err, failed to load snapshot: ", err)
-		log.Print("init err: ", err)
+		mylog.DPrintf("init failed: %s, init snapshot with empty", err)
 	}
 	if ps.snapshot == nil {
 		ps.snapshot = &Snapshot{RowData: make([]byte, 0, 1024)}
@@ -100,7 +101,7 @@ func (ps *Persister) initFromDisk() {
 		ps.state.LastIndex = 0
 		// ps.checkSum[0] = crcentry{Crc: crc32.ChecksumIEEE(b), Index: 0}
 	} else {
-		for i := ps.state.FirstIndex; i <= ps.state.LastIndex; i++ {
+		for i := max(ps.state.FirstIndex, 1); i <= ps.state.LastIndex; i++ {
 			b, err := ps.log.Read(uint64(i))
 			if err != nil {
 				log.Fatal("failed to read log: ", err)
@@ -126,20 +127,23 @@ func (ps *Persister) loadState() {
 	b, err := os.ReadFile(ps.statName)
 	if err != nil {
 		// log.Fatal("failed to load state, err: ", err)
-		log.Print("failed to load state, err: ", err)
+		mylog.DPrintf("failed to load state err: %s, init state with default", err)
 	}
 	if !Exist(ps.statName) {
 		_, err := os.Create(ps.statName)
 		if err != nil {
-			log.Print("failed to create file: ", err)
+			mylog.DPrintln("failed to create file: ", err)
+			panic(err)
 		}
+		ps.saveState()
 	}
 	if len(b) > 0 {
 		err = proto.Unmarshal(b, ps.state)
 		if err != nil {
-			log.Print("failed to unmarshal state, err: ", err)
+			mylog.DPrintln("failed to unmarshal state, err: ", err)
+			panic(err)
 		} else {
-			log.Printf("%v load state first: %v, last: %v", ps.id, ps.state.FirstIndex, ps.state.LastIndex)
+			mylog.DPrintf("%v load state first: %v, last: %v", ps.id, ps.state.FirstIndex, ps.state.LastIndex)
 		}
 	}
 
@@ -168,7 +172,7 @@ func (ps *Persister) ReadRaftState() ([]*rrpc.Entry, int32, int64, int64) {
 	// if ps.state.LastIndex == 0 {
 	entries = append(entries, &rrpc.Entry{Term: max(ps.state.FirstIndex-1, 0)})
 	// }
-	for ; end > 0 && start <= end; start++ {
+	for ; start > 0 && start <= end; start++ {
 		b, err := ps.log.Read(uint64(start))
 		if err != nil {
 			log.Fatal("failed to read log, err: ", err)
@@ -182,13 +186,13 @@ func (ps *Persister) ReadRaftState() ([]*rrpc.Entry, int32, int64, int64) {
 	}
 
 	if entries == nil {
-		log.Print("entries is nil")
+		mylog.DPrintln("entries is nil")
 	}
 	if ps.state == nil {
-		log.Print("ps.state is nil")
+		mylog.DPrintln("ps.state is nil")
 	}
 	if ps.state.RaftSate == nil {
-		log.Print("ps.state.RaftSate is nil")
+		mylog.DPrintln("ps.state.RaftSate is nil")
 	}
 
 	// b, err := ps.log.Read(ps.log.GetFirstIndex())
@@ -202,8 +206,8 @@ func (ps *Persister) ReadRaftState() ([]*rrpc.Entry, int32, int64, int64) {
 	// }
 	// log.Printf("Log first saved entry: %v", firstEntry)
 
-	log.Printf("%v persister saved state FirstIdx: %v,LastIdx: %v, commitIndex: %v", ps.id, ps.state.FirstIndex, ps.state.LastIndex, ps.state.LastCommitIndex)
-	log.Printf("%v val saved state FirstIdx: %v,LastIdx: %v", ps.id, ps.log.GetFirstIndex(), ps.log.GetLastIndex())
+	mylog.DPrintf("%v persister saved state FirstIdx: %v,LastIdx: %v, commitIndex: %v", ps.id, ps.state.FirstIndex, ps.state.LastIndex, ps.state.LastCommitIndex)
+	mylog.DPrintf("%v val saved state FirstIdx: %v,LastIdx: %v", ps.id, ps.log.GetFirstIndex(), ps.log.GetLastIndex())
 	// log.Printf("Load logs: %v", entries)
 	// log.Fatal("Stop")
 	return entries, ps.state.RaftSate.VotedFor, ps.state.RaftSate.CurrentTerm, ps.state.LastCommitIndex
@@ -242,14 +246,14 @@ func (ps *Persister) Save(snapshot []byte, state *State, logs []*rrpc.Entry, las
 }
 
 func (ps *Persister) filter(lastIndex int64, logs []*rrpc.Entry) {
-	log.Printf("persister lastIdx: %v, log lastIdx: %v", ps.state.LastIndex, lastIndex)
+	mylog.DPrintf("persister lastIdx: %v, log lastIdx: %v", ps.state.LastIndex, lastIndex)
 	if lastIndex >= ps.state.LastIndex {
 		for i, entry := range logs {
 			b, err := proto.Marshal(entry)
 			if err != nil {
 				log.Fatal("Marshal log error: ", err)
 			}
-			log.Printf("%v (1) add log channel idx: %v", ps.id, lastIndex+int64(i+1))
+			mylog.DPrintf("%v (1) add log channel idx: %v", ps.id, lastIndex+int64(i+1))
 			ps.entryCh <- &logEntry{Index: lastIndex + int64(i+1), Entry: b}
 		}
 		// if lastIndex > ps.state.LastIndex {
@@ -264,7 +268,7 @@ func (ps *Persister) filter(lastIndex int64, logs []*rrpc.Entry) {
 			log.Fatal("Marshal log error: ", err)
 		}
 		if i+lastIndex+1 > ps.state.LastIndex || crc32.ChecksumIEEE(b) != ps.checkSum[i+lastIndex+1-ps.state.FirstIndex] {
-			log.Printf("%v (2) add log channel idx: %v", ps.id, i+lastIndex+1)
+			mylog.DPrintf("%v (2) add log channel idx: %v", ps.id, i+lastIndex+1)
 			ps.entryCh <- &logEntry{Index: i + lastIndex + 1, Entry: b}
 		}
 	}
@@ -284,14 +288,17 @@ func (ps *Persister) saveLogToDisk() {
 				log.Fatalf("%v truncateback failed idx %v err: %v", ps.id, _log.Index-1, err)
 			}
 			ps.checkSum = ps.checkSum[:_log.Index-ps.state.FirstIndex]
+			ps.state.LastIndex = int64(ps.log.GetLastIndex()) - 1
 		}
 
-		ps.checkSum = append(ps.checkSum, crc32.ChecksumIEEE(_log.Entry))
 		err := ps.log.Write(uint64(_log.Index), _log.Entry)
 		if err != nil {
-			log.Printf("%v write log to disk failed: %v", ps.id, err)
+			mylog.DPrintf("%v write log to disk failed: %v", ps.id, err)
+			ps.mu.Unlock()
+			continue
 		}
-		ps.state.LastIndex = int64(ps.log.GetLastIndex())
+		ps.checkSum = append(ps.checkSum, crc32.ChecksumIEEE(_log.Entry))
+		ps.state.LastIndex = int64(ps.log.GetLastIndex()) - 1
 		ps.saveState()
 		ps.mu.Unlock()
 	}
@@ -303,7 +310,7 @@ func (ps *Persister) saveSnapToDisk() {
 		if err != nil {
 			log.Fatal("snapshot save err: ", err)
 		} else {
-			log.Print("snapshot save to disk successfully")
+			mylog.DPrintln("snapshot save to disk successfully")
 			ps.snapshotter.LastIdx = ps.snapshot.LastIndex
 		}
 		lastWalIndex := ps.log.GetLastIndex()
@@ -312,15 +319,15 @@ func (ps *Persister) saveSnapToDisk() {
 		err = ps.log.TruncateFront(min(uint64(ps.snapshot.LastIndex), lastWalIndex))
 		// err = ps.log.TruncateFront(uint64(ps.snapshot.LastIndex + 1))
 		if err != nil {
-			log.Printf("log firstIdx: %v,lastIdx: %v, need truncate: %v", ps.log.GetFirstIndex(), lastWalIndex, min(uint64(ps.snapshot.LastIndex), lastWalIndex))
+			mylog.DPrintf("log firstIdx: %v,lastIdx: %v, need truncate: %v", ps.log.GetFirstIndex(), lastWalIndex, min(uint64(ps.snapshot.LastIndex), lastWalIndex))
 			log.Fatal("truncate front log err: ", err)
 		}
-		log.Printf("log in disk firstIdx: %v, lastIdx: %v", ps.log.GetFirstIndex(), ps.log.GetFirstIndex())
+		mylog.DPrintf("log in disk firstIdx: %v, lastIdx: %v", ps.log.GetFirstIndex(), ps.log.GetFirstIndex())
 		ps.checkSum = ps.checkSum[ps.snapshot.LastIndex-ps.state.FirstIndex+1:]
 		ps.state.FirstIndex = ps.snapshot.LastIndex + 1
 		ps.saveState()
 	} else {
-		log.Printf("will not save snapshot lastIdx: %v", ps.snapshot.LastIndex)
+		mylog.DPrintf("will not save snapshot lastIdx: %v", ps.snapshot.LastIndex)
 	}
 	ps.ResetSnapTimer()
 }

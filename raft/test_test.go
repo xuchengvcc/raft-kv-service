@@ -2,18 +2,16 @@ package raft
 
 import (
 	"fmt"
-	"net"
 	"raft-kv-service/persister"
 	rrpc "raft-kv-service/rpc"
 	"strconv"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 )
 
-func setupTestCase(t *testing.T) ([]*Raftserver, []chan ApplyMsg) {
-	nodeAddrs := []string{"localhost:50050", "localhost:50051", "localhost:50052", "localhost:50053", "localhost:50054"}
+func setupTestCase() ([]*Raftserver, []chan ApplyMsg) {
+	nodeAddrs := map[int32]string{0: "localhost:50050", 1: "localhost:50051", 2: "localhost:50052", 3: "localhost:50053", 4: "localhost:50054"}
 	// ips := []string{"localhost", "localhost", "localhost", "localhost", "localhost"}
 	servers := make([]*Raftserver, 0, len(nodeAddrs))
 	channels := make([]chan ApplyMsg, 0, len(nodeAddrs))
@@ -23,13 +21,9 @@ func setupTestCase(t *testing.T) ([]*Raftserver, []chan ApplyMsg) {
 		persister := persister.MakePersister(i)
 		applyCh := make(chan ApplyMsg, 1)
 		channels = append(channels, applyCh)
-		ip_port := strings.Split(nodeAddrs[i], ":")
-		lis, err := net.Listen("tcp", fmt.Sprintf(":%v", ip_port[1]))
-		if err != nil {
-			t.Fatalf("listen Failed at %v, Err:%v", ip_port[1], err)
-		}
+
 		ch := make(chan struct{}, 1)
-		server := Make(nodeAddrs, int32(i), persister, applyCh, nodeAddrs[i], lis, ch)
+		server := Make(nodeAddrs, int32(i), persister, applyCh, nodeAddrs[int32(i)], ch)
 
 		servers = append(servers, server)
 	}
@@ -41,7 +35,7 @@ func setupTestCase(t *testing.T) ([]*Raftserver, []chan ApplyMsg) {
 func TestConnect(t *testing.T) {
 	fmt.Println("write setup code here...") // 测试之前的做一些设置
 	// 如果 TestMain 使用了 flags，这里应该加上flag.Parse()
-	servers, channels := setupTestCase(t)
+	servers, channels := setupTestCase()
 	fmt.Printf("装配完毕\n")
 	time.Sleep(4 * time.Second)
 	var mu sync.Mutex

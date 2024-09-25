@@ -1,4 +1,4 @@
-package raft
+package mylog
 
 import "log"
 
@@ -8,5 +8,11 @@ const Debug = true
 func DPrintf(format string, a ...interface{}) {
 	if Debug {
 		log.Printf(format, a...)
+	}
+}
+
+func DPrintln(a ...interface{}) {
+	if Debug {
+		log.Println(a...)
 	}
 }

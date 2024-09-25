@@ -22,6 +22,7 @@ const (
 	Raft_RequestVote_FullMethodName     = "/Raft/RequestVote"
 	Raft_AppendEntries_FullMethodName   = "/Raft/AppendEntries"
 	Raft_InstallSnapshot_FullMethodName = "/Raft/InstallSnapshot"
+	Raft_GetCommitIndex_FullMethodName  = "/Raft/GetCommitIndex"
 )
 
 // RaftClient is the client API for Raft service.
@@ -32,6 +33,7 @@ type RaftClient interface {
 	RequestVote(ctx context.Context, in *RequestVoteArgs, opts ...grpc.CallOption) (*RequestVoteReply, error)
 	AppendEntries(ctx context.Context, in *AppendEntriesArgs, opts ...grpc.CallOption) (*AppendEntriesReply, error)
 	InstallSnapshot(ctx context.Context, in *InstallSnapshotArgs, opts ...grpc.CallOption) (*InstallSnapshotReply, error)
+	GetCommitIndex(ctx context.Context, in *GetCommitIndexArgs, opts ...grpc.CallOption) (*GetCommitIndexReply, error)
 }
 
 type raftClient struct {
@@ -72,6 +74,16 @@ func (c *raftClient) InstallSnapshot(ctx context.Context, in *InstallSnapshotArg
 	return out, nil
 }
 
+func (c *raftClient) GetCommitIndex(ctx context.Context, in *GetCommitIndexArgs, opts ...grpc.CallOption) (*GetCommitIndexReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetCommitIndexReply)
+	err := c.cc.Invoke(ctx, Raft_GetCommitIndex_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // RaftServer is the server API for Raft service.
 // All implementations must embed UnimplementedRaftServer
 // for forward compatibility
@@ -80,6 +92,7 @@ type RaftServer interface {
 	RequestVote(context.Context, *RequestVoteArgs) (*RequestVoteReply, error)
 	AppendEntries(context.Context, *AppendEntriesArgs) (*AppendEntriesReply, error)
 	InstallSnapshot(context.Context, *InstallSnapshotArgs) (*InstallSnapshotReply, error)
+	GetCommitIndex(context.Context, *GetCommitIndexArgs) (*GetCommitIndexReply, error)
 	mustEmbedUnimplementedRaftServer()
 }
 
@@ -95,6 +108,9 @@ func (UnimplementedRaftServer) AppendEntries(context.Context, *AppendEntriesArgs
 }
 func (UnimplementedRaftServer) InstallSnapshot(context.Context, *InstallSnapshotArgs) (*InstallSnapshotReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method InstallSnapshot not implemented")
+}
+func (UnimplementedRaftServer) GetCommitIndex(context.Context, *GetCommitIndexArgs) (*GetCommitIndexReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetCommitIndex not implemented")
 }
 func (UnimplementedRaftServer) mustEmbedUnimplementedRaftServer() {}
 
@@ -163,6 +179,24 @@ func _Raft_InstallSnapshot_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Raft_GetCommitIndex_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetCommitIndexArgs)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RaftServer).GetCommitIndex(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Raft_GetCommitIndex_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RaftServer).GetCommitIndex(ctx, req.(*GetCommitIndexArgs))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Raft_ServiceDesc is the grpc.ServiceDesc for Raft service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -181,6 +215,10 @@ var Raft_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "InstallSnapshot",
 			Handler:    _Raft_InstallSnapshot_Handler,
+		},
+		{
+			MethodName: "GetCommitIndex",
+			Handler:    _Raft_GetCommitIndex_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

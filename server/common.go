@@ -1,15 +1,33 @@
 package server
 
+type Err string
+
 const (
 	OK               string = "OK"
 	ErrNoKey         string = "ErrNoKey"
 	ErrWrongLeader   string = "ErrWrongLeader"
+	ErrLeaderChanged string = "ErrLeaderChanged"
 	ErrHandleTimeout string = "ErrHandleTimeout"
 	ErrChanClosed    string = "ErrChanClosed"
-	ErrLeaderChanged string = "ErrLeaderChanged"
 )
 
-type Err string
+var ErrMap map[string]uint32 = map[string]uint32{
+	OK:               200,
+	ErrNoKey:         100,
+	ErrWrongLeader:   101,
+	ErrLeaderChanged: 102,
+	ErrHandleTimeout: 103,
+	ErrChanClosed:    104,
+}
+
+var ErrIdMap map[uint32]string = map[uint32]string{
+	200: OK,
+	100: ErrNoKey,
+	101: ErrWrongLeader,
+	102: ErrLeaderChanged,
+	103: ErrHandleTimeout,
+	104: ErrChanClosed,
+}
 
 // Put or Append
 // type PutAppendArgs struct {

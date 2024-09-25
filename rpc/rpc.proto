@@ -8,6 +8,15 @@ service Raft {
   rpc RequestVote (RequestVoteArgs) returns (RequestVoteReply) {}
   rpc AppendEntries (AppendEntriesArgs) returns (AppendEntriesReply) {}
   rpc InstallSnapshot (InstallSnapshotArgs) returns (InstallSnapshotReply) {}
+  rpc GetCommitIndex (GetCommitIndexArgs) returns (GetCommitIndexReply) {}
+}
+
+message GetCommitIndexArgs {
+}
+
+message GetCommitIndexReply {
+    int64 term = 1;
+    int64 commitIndex = 2;
 }
 
 message RequestVoteArgs {
@@ -23,7 +32,7 @@ message RequestVoteReply{
 }
 
 message Op {
-    int32 optype = 1;
+    uint32 optype = 1;
     uint64 incrId = 2;
     int32 clerkId = 3;
     string key = 4;
