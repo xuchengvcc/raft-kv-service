@@ -11,7 +11,7 @@ Please first go to the `./conf` folder to set the address information: `server.j
 
 cluster info:
 ```
-# sever.json
+// sever.json
 
 {
     "nodeNum":5,
