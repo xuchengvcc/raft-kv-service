@@ -1,11 +1,11 @@
 # raft-kv-service
-
+## start
 ### protobuf
 to generate `name_grpc.pb.go` and `name.pb.go`
 ```
 protoc --go_out=. --go-grpc_out=. name.proto
 ```
-# configuration
+### configuration
 
 Please first go to the `./conf` folder to set the address information: `server.json` and `proxy.json`
 
@@ -41,14 +41,14 @@ proxy info:
 ```
 
 
-# start a server cluster
+### start a server cluster
 
 ```
 cd ./main
 go run main.go -s server
 ```
 
-# start a client
+### start a client
 ```
 go run main.go -s client
 ```
