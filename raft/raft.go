@@ -19,7 +19,6 @@ package raft
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"math/rand"
@@ -28,6 +27,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	cm "raft-kv-service/common"
 	"raft-kv-service/mylog"
 	"raft-kv-service/persister"
 	rrpc "raft-kv-service/rpc"
@@ -446,7 +446,7 @@ func (rf *Raftserver) SendCommitIndex(ch chan int64) error {
 		defer rf.mu.Unlock()
 		if r.Term < rf.commitIndex || r.CommitIndex < rf.commitIndex {
 			ch <- -1
-			return errors.New("woring leader record")
+			return cm.ErrorWrongLeader
 		} else if r.Term > rf.currentTerm {
 			rf.currentTerm = r.Term
 		}
@@ -877,9 +877,10 @@ func (rf *Raftserver) StartSendAppendEntries() {
 				args.Entries = append([]*rrpc.Entry{}, rf.log[rf.GlobalToLocal(rf.nextIndex[i]):]...)
 				// args.Entries = rf.log[rf.GlobalToLocal(rf.nextIndex[i]):]
 				mylog.DPrintf("AppendEntries: L %v(T: %v,I: %v) >>> F %v\n", rf.me, rf.currentTerm, rf.nextIndex[i], i)
-			} else {
-				mylog.DPrintf("HeartBeats: L %v(T: %v,I: %v) >>> F %v\n", rf.me, rf.currentTerm, rf.nextIndex[i], i)
 			}
+			// else {
+			// mylog.DPrintf("HeartBeats: L %v(T: %v,I: %v) >>> F %v\n", rf.me, rf.currentTerm, rf.nextIndex[i], i)
+			// }
 
 			if installSnapshot {
 				go rf.sendInstallSnapshotToServer(i)

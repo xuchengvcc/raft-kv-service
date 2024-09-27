@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	cm "raft-kv-service/common"
 	"raft-kv-service/mylog"
 	"raft-kv-service/proxy"
 	"sync"
@@ -207,6 +208,7 @@ func (ck *Clerk) packData(keyValue []byte, op, keyLen uint32) ([]byte, uint64, e
 // 将消息体内容解析，并通过channel传递
 func (ck *Clerk) processResponse(incrId uint64, errId uint32, binaryData []byte) error {
 	body, err := ck.bodypacker.Unpack(binaryData)
+	// mylog.DPrintln("[Client] get result Error: ", cm.ErrIdMap[errId], ", key: ", body.GetKey(), ", value: ", body.GetValue())
 	if err != nil {
 		return err
 	}
@@ -229,7 +231,6 @@ func (ck *Clerk) processGetBuffer() {
 		if ck.getOffset < int(ck.respPacker.GetHeadLen()) {
 			return
 		}
-
 		dataLen := binary.LittleEndian.Uint32(ck.responseGetBuffer[4:8])
 
 		// 消息不完整，等待完整数据
@@ -243,7 +244,9 @@ func (ck *Clerk) processGetBuffer() {
 			mylog.DPrintln("unpack reponse error: ", err)
 			return
 		}
-		smsg.SetData(ck.responsePutBuffer[ck.respPacker.GetHeadLen() : ck.respPacker.GetHeadLen()+dataLen])
+		data := make([]byte, smsg.GetDataLen())
+		copy(data, ck.responseGetBuffer[ck.respPacker.GetHeadLen():ck.respPacker.GetHeadLen()+dataLen])
+		smsg.SetData(data)
 		err = ck.processResponse(smsg.IncrId, smsg.Err, smsg.GetData())
 		if err != nil {
 			mylog.DPrintln("processBody error: ", err)
@@ -295,6 +298,7 @@ func (ck *Clerk) receivePutAppendResponse() {
 
 		if err != nil {
 			mylog.DPrintln("reading from server error: ", err)
+			// TODO: 如果是连接断开，每隔一段时间尝试重新连接
 			return
 		}
 
@@ -311,10 +315,12 @@ func (ck *Clerk) receiveGetResponse() {
 
 		if err != nil {
 			mylog.DPrintln("reading from server error: ", err)
+			// TODO: 如果是连接断开，每隔一段时间尝试重新连接
 			return
 		}
 
 		ck.getOffset += n
+		// mylog.DPrintln("[Client] getBuffer: ", ck.responseGetBuffer[:ck.getOffset])
 		ck.processGetBuffer()
 	}
 }
@@ -380,8 +386,8 @@ func (ck *Clerk) Get(key string, timeout time.Duration) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if res.ErrId != ErrMap[OK] {
-		return "", fmt.Errorf(ErrIdMap[res.ErrId])
+	if res.ErrId != cm.ErrMap[cm.OK] {
+		return "", fmt.Errorf(cm.ErrIdMap[res.ErrId])
 	}
 	return res.GetValue(), nil
 }
@@ -403,8 +409,8 @@ func (ck *Clerk) Put(key string, value string, timeout time.Duration) error {
 	if err != nil {
 		return err
 	}
-	if res.ErrId != ErrMap[OK] {
-		return fmt.Errorf(ErrIdMap[res.ErrId], err)
+	if res.ErrId != cm.ErrMap[cm.OK] {
+		return fmt.Errorf(cm.ErrIdMap[res.ErrId], err)
 	}
 	return nil
 }
@@ -414,9 +420,9 @@ func (ck *Clerk) Append(key string, value string, timeout time.Duration) error {
 	keyValue := make([]byte, 0, len(key)+len(value))
 	keyValue = append(keyValue, []byte(key)...)
 	keyValue = append(keyValue, []byte(value)...)
-	res, err := ck.retryRequest(PUT, uint32(len(key)), keyValue, timeout)
-	if res.ErrId != ErrMap[OK] {
-		return fmt.Errorf(ErrIdMap[res.ErrId], err)
+	res, err := ck.retryRequest(APPEND, uint32(len(key)), keyValue, timeout)
+	if res.ErrId != cm.ErrMap[cm.OK] {
+		return fmt.Errorf(cm.ErrIdMap[res.ErrId], err)
 	}
 	return err
 }

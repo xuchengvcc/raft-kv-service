@@ -135,7 +135,8 @@ func (ps *Persister) loadState() {
 			mylog.DPrintln("failed to create file: ", err)
 			panic(err)
 		}
-		ps.saveState()
+		ps.state.FirstIndex = 1
+		// ps.saveState()
 	}
 	if len(b) > 0 {
 		err = proto.Unmarshal(b, ps.state)
@@ -172,10 +173,10 @@ func (ps *Persister) ReadRaftState() ([]*rrpc.Entry, int32, int64, int64) {
 	// if ps.state.LastIndex == 0 {
 	entries = append(entries, &rrpc.Entry{Term: max(ps.state.FirstIndex-1, 0)})
 	// }
-	for ; start > 0 && start <= end; start++ {
+	for ; end > 0 && start <= end; start++ {
 		b, err := ps.log.Read(uint64(start))
 		if err != nil {
-			log.Fatal("failed to read log, err: ", err)
+			log.Fatal("FirstIdx: ", start, ", failed to read log, err: ", err)
 		}
 		entry := &rrpc.Entry{}
 		err = proto.Unmarshal(b, entry)
@@ -194,17 +195,6 @@ func (ps *Persister) ReadRaftState() ([]*rrpc.Entry, int32, int64, int64) {
 	if ps.state.RaftSate == nil {
 		mylog.DPrintln("ps.state.RaftSate is nil")
 	}
-
-	// b, err := ps.log.Read(ps.log.GetFirstIndex())
-	// if err != nil {
-	// 	log.Fatal("failed to read log, err: ", err)
-	// }
-	// firstEntry := &rrpc.Entry{}
-	// err = proto.Unmarshal(b, firstEntry)
-	// if err != nil {
-	// 	log.Fatal("failed to unmarshal log, err: ", err)
-	// }
-	// log.Printf("Log first saved entry: %v", firstEntry)
 
 	mylog.DPrintf("%v persister saved state FirstIdx: %v,LastIdx: %v, commitIndex: %v", ps.id, ps.state.FirstIndex, ps.state.LastIndex, ps.state.LastCommitIndex)
 	mylog.DPrintf("%v val saved state FirstIdx: %v,LastIdx: %v", ps.id, ps.log.GetFirstIndex(), ps.log.GetLastIndex())
@@ -232,29 +222,19 @@ func (ps *Persister) Save(snapshot []byte, state *State, logs []*rrpc.Entry, las
 	ps.snapshot.LastIndex = lastIncludeIndex
 	ps.snapshot.LastTerm = lastTerm
 	// TODO: 找到冲突开始的日志
-
-	// log.Printf("将存储logs: %v", logs)
-
-	// localLogs := make([]*rrpc.Entry, 0)
-	// for i:= 0; i< len(logs); i++ {
-	// 	localLogs[i] = &rrpc.Entry{
-
-	// 	}
-	// }
-	// go ps.saveLog(lastIncludeIndex, commitIndex, logs)
 	ps.filter(lastIncludeIndex, logs)
 }
 
 func (ps *Persister) filter(lastIndex int64, logs []*rrpc.Entry) {
-	mylog.DPrintf("persister lastIdx: %v, log lastIdx: %v", ps.state.LastIndex, lastIndex)
+	// mylog.DPrintf("persister lastIdx: %v, log lastIncludedIdx: %v", ps.state.LastIndex, lastIndex)
 	if lastIndex >= ps.state.LastIndex {
 		for i, entry := range logs {
 			b, err := proto.Marshal(entry)
 			if err != nil {
 				log.Fatal("Marshal log error: ", err)
 			}
-			mylog.DPrintf("%v (1) add log channel idx: %v", ps.id, lastIndex+int64(i+1))
-			ps.entryCh <- &logEntry{Index: lastIndex + int64(i+1), Entry: b}
+			mylog.DPrintf("%v (1) add log channel idx: %v", ps.id, lastIndex+int64(i)+1)
+			ps.entryCh <- &logEntry{Index: lastIndex + int64(i) + 1, Entry: b}
 		}
 		// if lastIndex > ps.state.LastIndex {
 		// 	// TODO: 将快照持久化，并截断日志
@@ -288,7 +268,7 @@ func (ps *Persister) saveLogToDisk() {
 				log.Fatalf("%v truncateback failed idx %v err: %v", ps.id, _log.Index-1, err)
 			}
 			ps.checkSum = ps.checkSum[:_log.Index-ps.state.FirstIndex]
-			ps.state.LastIndex = int64(ps.log.GetLastIndex()) - 1
+			ps.state.LastIndex = int64(ps.log.GetLastIndex())
 		}
 
 		err := ps.log.Write(uint64(_log.Index), _log.Entry)
@@ -298,7 +278,7 @@ func (ps *Persister) saveLogToDisk() {
 			continue
 		}
 		ps.checkSum = append(ps.checkSum, crc32.ChecksumIEEE(_log.Entry))
-		ps.state.LastIndex = int64(ps.log.GetLastIndex()) - 1
+		ps.state.LastIndex = int64(ps.log.GetLastIndex())
 		ps.saveState()
 		ps.mu.Unlock()
 	}

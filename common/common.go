@@ -1,4 +1,6 @@
-package server
+package common
+
+import "errors"
 
 type Err string
 
@@ -9,6 +11,14 @@ const (
 	ErrLeaderChanged string = "ErrLeaderChanged"
 	ErrHandleTimeout string = "ErrHandleTimeout"
 	ErrChanClosed    string = "ErrChanClosed"
+)
+
+var (
+	ErrorNoKey         = errors.New(ErrNoKey)
+	ErrorWrongLeader   = errors.New(ErrWrongLeader)
+	ErrorLeaderChanged = errors.New(ErrLeaderChanged)
+	ErrorHandleTimeout = errors.New(ErrHandleTimeout)
+	ErrorChanClosed    = errors.New(ErrChanClosed)
 )
 
 var ErrMap map[string]uint32 = map[string]uint32{

@@ -3,7 +3,7 @@ package proxy
 import (
 	"bytes"
 	"encoding/binary"
-	"fmt"
+	"raft-kv-service/mylog"
 )
 
 type Body struct {
@@ -47,7 +47,7 @@ func (dp *BodyPack) Pack(body Body) ([]byte, error) {
 		return nil, err
 	}
 	// 将 key&value 写进 databuff 中
-	if err := binary.Write(dataBuff, binary.LittleEndian, []byte(body.GetKeyValue())); err != nil {
+	if err := binary.Write(dataBuff, binary.LittleEndian, body.GetKeyValue()); err != nil {
 		return nil, err
 	}
 	return dataBuff.Bytes(), nil
@@ -62,7 +62,7 @@ func (dp *BodyPack) Unpack(data []byte) (*Body, error) {
 
 	// 读KeyLen
 	if err := binary.Read(dataReader, binary.LittleEndian, &body.KeyLen); err != nil {
-		fmt.Println("read keyLen error: ", err)
+		mylog.DPrintln("read keyLen error: ", err)
 		return nil, err
 	}
 	body.KeyValue = data[4:]

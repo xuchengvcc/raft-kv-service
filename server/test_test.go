@@ -74,7 +74,7 @@ func setupTestCase(t *testing.T) ([]*KVServer, []*Clerk) {
 
 	// time.Sleep(3 * time.Second)
 	for i := 0; i < serverNum; i++ {
-		<-servers[i].serverprepare
+		<-servers[i].Serverprepare
 	}
 
 	// TODO: 启动代理
@@ -134,7 +134,7 @@ func TestStartClusterManagerServers(t *testing.T) {
 		servers = append(servers, server)
 	}
 	for i := 0; i < serverNum; i++ {
-		<-servers[i].serverprepare
+		<-servers[i].Serverprepare
 	}
 
 	time.Sleep(5 * time.Second)
@@ -189,7 +189,7 @@ func TestStartServer(t *testing.T) {
 	}
 
 	for i := 0; i < serverNum; i++ {
-		<-servers[i].serverprepare
+		<-servers[i].Serverprepare
 	}
 
 	time.Sleep(5 * time.Second)
@@ -248,7 +248,7 @@ func TestUserspaceProxy(t *testing.T) {
 		servers = append(servers, server)
 	}
 	for i := 0; i < serverNum; i++ {
-		<-servers[i].serverprepare
+		<-servers[i].Serverprepare
 	}
 
 	go p.Run()
@@ -326,7 +326,7 @@ func TestStart(t *testing.T) {
 		servers = append(servers, server)
 	}
 	for i := 0; i < serverNum; i++ {
-		<-servers[i].serverprepare
+		<-servers[i].Serverprepare
 	}
 
 	go p.Run()
