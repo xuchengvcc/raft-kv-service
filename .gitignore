@@ -10,3 +10,6 @@
 /server/server.test
 /proxy/snet
 /proxy/utils
+/main/log*
+/main/snap*
+/main/stat*
